@@ -70,16 +70,15 @@
                 containers:
                   - name: {{ server_type }}
                     image: {{ container_image }}
-                    # Run nginx in foreground and send logs to stdout/stderr
+                    # Run nginx in foreground (Red Hat docs recommend this)
                     command:
-                      - /bin/sh
-                      - -c
-                      - |
-                        nginx -g 'daemon off; error_log /dev/stderr info; access_log /dev/stdout;'
+                      - nginx
+                      - "-g"
+                      - "daemon off;"
                     ports:
                       - name: http
                         containerPort: {{ container_port | int }}
-                    # TCP probes: just confirm the port is open
+                    # TCP probes: we just verify the port is open
                     readinessProbe:
                       tcpSocket:
                         port: {{ container_port | int }}
