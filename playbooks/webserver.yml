@@ -9,7 +9,7 @@
     server_type:    "{{ (spec.type | default('nginx')) | lower }}"
     replicas:       "{{ spec.replicas | default(1) | int }}"
 
-    # Use a non-reserved var name for the container port
+    # Use a non-reserved var name for the container port and coerce to int
     container_port: "{{ spec.port | default(8080) | int }}"
 
     # OpenShift-friendly default images (non-root UBI)
@@ -22,7 +22,9 @@
     #################################################################
     - name: Detect if WebServer CR is being deleted
       set_fact:
-        being_deleted: "{{ ansible_operator_meta.deletion_timestamp is defined }}"
+        being_deleted: >-
+          {{ ansible_operator_meta.deletion_timestamp is defined
+             and ansible_operator_meta.deletion_timestamp is not none }}
 
     #################################################################
     # Common labels (for create/update path)
@@ -51,7 +53,7 @@
             container_image: >-
               {{ (
                   spec.image
-                  if (spec.image is defined and spec.image | string | length > 0)
+                  if (spec.image is defined and (spec.image | string | length > 0))
                   else default_image
                 ) | trim }}
 
@@ -65,7 +67,8 @@
                 namespace: "{{ webserver_ns }}"
                 labels: "{{ labels }}"
               spec:
-                replicas: "{{ replicas }}"
+                # IMPORTANT: send replicas as integer, not string
+                replicas: {{ replicas | int }}
                 selector:
                   matchLabels:
                     app: "{{ webserver_name }}"
@@ -78,7 +81,8 @@
                         image: "{{ container_image }}"
                         ports:
                           - name: http
-                            containerPort: "{{ container_port }}"
+                            # IMPORTANT: render containerPort as int, not string
+                            containerPort: {{ container_port | int }}
                         readinessProbe:
                           httpGet:
                             path: /
@@ -106,7 +110,7 @@
                   app: "{{ webserver_name }}"
                 ports:
                   - name: http
-                    port: 80
+                    port: 80          # already numeric
                     # route to the container's named port "http" (container_port)
                     targetPort: http
                     protocol: TCP
