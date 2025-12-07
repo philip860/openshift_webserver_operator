@@ -7,10 +7,10 @@
 
     # Normalize type to lowercase for consistent comparison
     server_type:    "{{ (spec.type | default('nginx')) | lower }}"
-    replicas:       "{{ spec.replicas | default(1) }}"
+    replicas:       "{{ spec.replicas | default(1) | int }}"
 
-    # DEFAULT PORT: 8080 (matches UBI nginx/httpd defaults)
-    port:           "{{ spec.port | default(8080) }}"
+    # Use a non-reserved var name for the container port
+    container_port: "{{ spec.port | default(8080) | int }}"
 
     # OpenShift-friendly default images (non-root UBI)
     nginx_image_default:  "registry.access.redhat.com/ubi8/nginx-120"
@@ -79,7 +79,8 @@
                         image: "{{ container_image }}"
                         ports:
                           - name: http
-                            containerPort: "{{ port | int }}"
+                            # IMPORTANT: render as a real int, not a string
+                            containerPort: {{ container_port }}
                         readinessProbe:
                           httpGet:
                             path: /
@@ -104,7 +105,7 @@
                 ports:
                   - name: http
                     port: 80
-                    # route to the container's named port "http" (8080)
+                    # route to the container's named port "http" (container_port)
                     targetPort: http
                     protocol: TCP
 
@@ -137,7 +138,7 @@
               phase: Ready
               message: >-
                 Deployed {{ server_type }} using image {{ container_image }}
-                with {{ replicas }} replica(s) on port {{ port }}
+                with {{ replicas }} replica(s) on port {{ container_port }}
 
       when: not being_deleted
 
