@@ -67,8 +67,8 @@
                 namespace: "{{ webserver_ns }}"
                 labels: "{{ labels }}"
               spec:
-                # IMPORTANT: send replicas as integer, not string
-                replicas: {{ replicas | int }}
+                # Keep this as an integer, but quote the template for YAML parser
+                replicas: "{{ replicas | int }}"
                 selector:
                   matchLabels:
                     app: "{{ webserver_name }}"
@@ -81,8 +81,8 @@
                         image: "{{ container_image }}"
                         ports:
                           - name: http
-                            # IMPORTANT: render containerPort as int, not string
-                            containerPort: {{ container_port | int }}
+                            # Also ensure this is an int
+                            containerPort: "{{ container_port | int }}"
                         readinessProbe:
                           httpGet:
                             path: /
@@ -110,7 +110,7 @@
                   app: "{{ webserver_name }}"
                 ports:
                   - name: http
-                    port: 80          # already numeric
+                    port: 80
                     # route to the container's named port "http" (container_port)
                     targetPort: http
                     protocol: TCP
