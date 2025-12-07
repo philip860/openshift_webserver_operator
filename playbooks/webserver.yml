@@ -78,16 +78,15 @@
                     ports:
                       - name: http
                         containerPort: {{ container_port | int }}
+                    # Use TCP socket probes so 403 on "/" doesn't kill the pod
                     readinessProbe:
-                      httpGet:
-                        path: /
-                        port: http
+                      tcpSocket:
+                        port: {{ container_port | int }}
                       initialDelaySeconds: 5
                       periodSeconds: 10
                     livenessProbe:
-                      httpGet:
-                        path: /
-                        port: http
+                      tcpSocket:
+                        port: {{ container_port | int }}
                       initialDelaySeconds: 10
                       periodSeconds: 20
 
