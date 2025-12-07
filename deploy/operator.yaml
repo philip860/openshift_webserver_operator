@@ -18,9 +18,13 @@ spec:
       serviceAccountName: webserver-operator
       containers:
         - name: ansible-operator
-          image: "quay.io/CHANGE_ME/webserver-operator:latest"
+          # >>> This is where the operator image is referenced <<<
+          image: "quay.io/philip860/webserver-operator:latest"
           imagePullPolicy: Always
           env:
+            # For OLM-managed installs this is filled automatically.
+            # For direct YAML install you can set WATCH_NAMESPACE to a specific project,
+            # or leave it empty to watch all namespaces.
             - name: WATCH_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -31,4 +35,3 @@ spec:
                   fieldPath: metadata.name
             - name: OPERATOR_NAME
               value: "webserver-operator"
-      # For simple, non-OLM install you can hardcode WATCH_NAMESPACE or set it via env
