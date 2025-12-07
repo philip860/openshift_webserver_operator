@@ -5,21 +5,26 @@
     webserver_name: "{{ ansible_operator_meta.name }}"
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
-    server_type:    "{{ spec.type | default('nginx') }}"
+    # Normalize type to lowercase so we can compare robustly
+    server_type:    "{{ (spec.type | default('nginx')) | lower }}"
     replicas:       "{{ spec.replicas | default(1) }}"
     port:           "{{ spec.port | default(8080) }}"
 
+    # Default images for each server type
     nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
     apache_image_default: "docker.io/library/httpd:2.4-alpine"
 
   tasks:
-    - name: Pick image based on type
+    #################################################################
+    # Determine container image (with override support)
+    #################################################################
+    - name: Pick image based on type and optional override
       set_fact:
         container_image: >-
           {% if spec.image is defined and spec.image|length > 0 %}
             {{ spec.image }}
           {% else %}
-            {% if server_type == 'apache' %}
+            {% if server_type in ['apache', 'httpd'] %}
               {{ apache_image_default }}
             {% else %}
               {{ nginx_image_default }}
