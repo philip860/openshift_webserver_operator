@@ -55,39 +55,56 @@
                   else default_image
                 ) | trim }}
 
+        - name: Build Deployment definition as JSON
+          set_fact:
+            deployment_definition: |
+              {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                  "name": "{{ webserver_name }}",
+                  "namespace": "{{ webserver_ns }}",
+                  "labels": {{ labels | to_json }}
+                },
+                "spec": {
+                  "replicas": {{ replicas }},
+                  "selector": {
+                    "matchLabels": { "app": "{{ webserver_name }}" }
+                  },
+                  "template": {
+                    "metadata": {
+                      "labels": {{ labels | to_json }}
+                    },
+                    "spec": {
+                      "containers": [
+                        {
+                          "name": "{{ server_type }}",
+                          "image": "{{ container_image }}",
+                          "ports": [
+                            {
+                              "name": "http",
+                              "containerPort": {{ container_port }}
+                            }
+                          ],
+                          "readinessProbe": {
+                            "httpGet": {
+                              "path": "/",
+                              "port": "http"
+                            },
+                            "initialDelaySeconds": 5,
+                            "periodSeconds": 10
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+
         - name: Ensure Deployment exists for selected web server
           k8s:
             state: present
-            definition:
-              apiVersion: apps/v1
-              kind: Deployment
-              metadata:
-                name: "{{ webserver_name }}"
-                namespace: "{{ webserver_ns }}"
-                labels: "{{ labels }}"
-              spec:
-                replicas: "{{ replicas }}"
-                selector:
-                  matchLabels:
-                    app: "{{ webserver_name }}"
-                template:
-                  metadata:
-                    labels: "{{ labels }}"
-                  spec:
-                    containers:
-                      - name: "{{ server_type }}"
-                        image: "{{ container_image }}"
-                        ports:
-                          - name: http
-                            # IMPORTANT: render as a real int, not a string
-                            containerPort: {{ container_port }}
-                        readinessProbe:
-                          httpGet:
-                            path: /
-                            # use the named port, avoids mismatch issues
-                            port: http
-                          initialDelaySeconds: 5
-                          periodSeconds: 10
+            definition: "{{ deployment_definition | from_json }}"
 
         - name: Ensure Service exists
           k8s:
