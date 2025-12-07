@@ -22,9 +22,7 @@
     #################################################################
     - name: Detect if WebServer CR is being deleted
       set_fact:
-        being_deleted: >-
-          {{ ansible_operator_meta.deletion_timestamp is defined
-             and ansible_operator_meta.deletion_timestamp is not none }}
+        being_deleted: "{{ (ansible_operator_meta.deletion_timestamp | default('')) | length > 0 }}"
 
     #################################################################
     # Common labels (for create/update path)
@@ -88,11 +86,10 @@
                   metadata:
                     labels: {{ labels | to_json }}
                   spec:
+                    restartPolicy: Always
                     containers:
                       - name: {{ server_type }}
                         image: {{ container_image }}
-                        # For the UBI nginx image, run nginx in foreground to avoid CrashLoop
-                        command: ["nginx", "-g", "daemon off;"]
                         ports:
                           - name: http
                             containerPort: {{ container_port | int }}
