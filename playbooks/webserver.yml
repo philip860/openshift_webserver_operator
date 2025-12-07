@@ -174,7 +174,6 @@
               message: >-
                 Deployed {{ server_type }} using image {{ container_image }}
                 with {{ replicas }} replica(s) on port {{ container_port }}
-
       when: not being_deleted
 
     #################################################################
@@ -219,4 +218,5 @@
               message: >-
                 WebServer {{ webserver_name }} deleted; associated Deployment,
                 Service, and Route have been removed.
+          ignore_errors: true     # ← key change so finalizer doesn't fail
       when: being_deleted
