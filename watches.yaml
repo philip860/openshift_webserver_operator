@@ -2,14 +2,14 @@
 - version: v1alpha1
   group: example.com
   kind: WebServer
+
+  # Main reconcile playbook (create/update path)
   playbook: playbooks/webserver.yml
 
-  # Let the Ansible Operator manage .status for the CR
   manageStatus: true
-
-  # Watch and reconcile on changes to dependent resources
   watchDependentResources: true
 
-  # Finalizer so we can run the delete/cleanup block in the playbook
+  # Finalizer executes the same playbook on delete (your playbook has delete logic)
   finalizer:
     name: webserver.finalizers.example.com
+    playbook: playbooks/webserver.yml
