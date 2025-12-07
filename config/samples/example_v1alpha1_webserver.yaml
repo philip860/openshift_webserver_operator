@@ -1,9 +1,9 @@
 apiVersion: example.com/v1alpha1
 kind: WebServer
 metadata:
-  name: my-webserver
+  name: sample-webserver
   namespace: default
 spec:
-  type: nginx   # or "apache"
+  type: nginx
   replicas: 2
   port: 8080

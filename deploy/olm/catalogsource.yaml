@@ -1,0 +1,10 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: webserver-operator-catalog
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: quay.io/philip860/webserver-operator-bundle:v1.0.0
+  displayName: WebServer Operator Catalog
+  publisher: Philip

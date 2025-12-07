@@ -1,0 +1,74 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  name: webserver-operator.v1.0.0
+  namespace: placeholder
+  annotations:
+    categories: "Application Runtime,WebServer"
+    capabilities: "Basic Install"
+    description: "An Ansible-based operator that deploys NGINX or Apache based on a WebServer CR."
+    containerImage: "quay.io/philip860/webserver-operator:latest"
+spec:
+  displayName: "WebServer Operator"
+  description: |
+    The WebServer Operator manages WebServer custom resources which can
+    deploy either NGINX or Apache HTTPD behind a Service and OpenShift Route.
+  maturity: alpha
+  version: 1.0.0
+  provider:
+    name: Philip
+  icon:
+    - base64data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAAAAgAB4iG8MwAAAABJRU5ErkJggg==
+      mediatype: image/png
+  keywords:
+    - nginx
+    - apache
+    - webserver
+    - ansible
+  install:
+    strategy: deployment
+    spec:
+      deployments:
+        - name: webserver-operator
+          spec:
+            selector:
+              matchLabels:
+                name: webserver-operator
+            replicas: 1
+            template:
+              metadata:
+                labels:
+                  name: webserver-operator
+              spec:
+                serviceAccountName: webserver-operator
+                containers:
+                  - name: ansible-operator
+                    image: quay.io/philip860/webserver-operator:latest
+                    imagePullPolicy: Always
+                    env:
+                      - name: WATCH_NAMESPACE
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.annotations['olm.targetNamespaces']
+                      - name: POD_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.name
+                      - name: OPERATOR_NAME
+                        value: "webserver-operator"
+  customresourcedefinitions:
+    owned:
+      - name: webservers.example.com
+        version: v1alpha1
+        kind: WebServer
+        displayName: "WebServer"
+        description: "Custom resource that declares an Apache or NGINX deployment."
+  installModes:
+    - type: OwnNamespace
+      supported: true
+    - type: SingleNamespace
+      supported: true
+    - type: MultiNamespace
+      supported: false
+    - type: AllNamespaces
+      supported: true

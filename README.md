@@ -1,120 +1,126 @@
-# WebServer Operator (Ansible-based, minimal)
+# WebServer Operator (Production-Ready, OLM-Enabled, Ansible-Based)
 
-This is a minimal OpenShift/Kubernetes operator implemented with the
-`quay.io/operator-framework/ansible-operator` base image.
+This project is a production-style custom operator for OpenShift that:
 
-It manages a custom resource `WebServer` that lets you choose to deploy
-either **NGINX** or **Apache HTTPD** with a Route exposed on OpenShift.
+- Uses **Ansible Operator** under the hood.
+- Exposes a `WebServer` Custom Resource (CRD) with validation and
+  OpenShift console form hints.
+- Deploys **NGINX** or **Apache HTTPD** based on `spec.type`.
+- Is packaged as an **OLM bundle**, so it appears under
+  **Operators → Installed Operators** in the OpenShift web console.
 
-## Operator image location
+## Images
 
-The operator Deployment uses the image:
-
-```yaml
-# deploy/operator.yaml
-spec:
-  template:
-    spec:
-      containers:
-        - name: ansible-operator
-          image: "quay.io/philip860/webserver-operator:latest"
-```
-
-Whenever you push a new version of the operator image to Quay, make sure
-this reference matches the tag you want to run.
+- Operator (runtime) image:
+  - `quay.io/philip860/webserver-operator:latest`
+- Bundle image (for OLM):
+  - `quay.io/philip860/webserver-operator-bundle:v1.0.0`
 
 ## Layout
 
-- `Dockerfile`               - Builds the operator image
-- `watches.yaml`             - Tells ansible-operator which CR to watch and which playbook to run
-- `playbooks/webserver.yml`  - Reconciliation logic (creates Deployment/Service/Route)
-- `roles/`                   - Placeholder for Ansible roles
-- `deploy/`                  - CRD, RBAC, Deployment, Namespace, and sample CR
+- `Dockerfile` – builds the operator runtime image
+- `watches.yaml` – connects the `WebServer` CRD to the Ansible playbook
+- `playbooks/webserver.yml` – reconciliation logic (Deployment/Service/Route)
+- `roles/webserver/` – placeholder Ansible role
+- `config/` – CRD, RBAC, manager Deployment, samples (operator-sdk style)
+- `deploy/` – namespace + OLM helper manifests (CatalogSource, Subscription)
+- `bundle/` – pre-generated OLM bundle (CSV, CRD, annotations)
+- `bundle/Dockerfile` – Dockerfile to build the bundle image
+- `Makefile` – simple targets for building/pushing images
 
-## Build the operator image
+## 1. Build & Push Operator Image
 
-You already have:
-
-- `quay.io/philip860/webserver-operator:latest`
-
-If you rebuild locally:
+If not already done:
 
 ```bash
-podman build -t quay.io/philip860/webserver-operator:latest .
-podman push quay.io/philip860/webserver-operator:latest
+export IMG=quay.io/philip860/webserver-operator:latest
+podman build -t $IMG .
+podman push $IMG
 ```
 
-## Install the operator on OpenShift
+## 2. Build & Push Bundle Image
+
+From the project root:
 
 ```bash
-# Create namespace for the operator
+export BUNDLE_IMG=quay.io/philip860/webserver-operator-bundle:v1.0.0
+podman build -f bundle/Dockerfile -t $BUNDLE_IMG bundle
+podman push $BUNDLE_IMG
+```
+
+## 3. Install via OLM (shows in Installed Operators)
+
+### Option A – YAML (CatalogSource + Subscription)
+
+```bash
+# Create target namespace for the operator runtime
 oc apply -f deploy/namespace.yaml
 
-# Install CRD
-oc apply -f deploy/crd-webservers.yaml
+# Register your bundle as a CatalogSource
+oc apply -f deploy/olm/catalogsource.yaml
 
-# Install RBAC + operator Deployment
-oc apply -f deploy/service_account.yaml
-oc apply -f deploy/role.yaml
-oc apply -f deploy/role_binding.yaml
-oc apply -f deploy/operator.yaml
+# Create the Subscription in the operator's namespace
+oc apply -f deploy/olm/subscription.yaml
 ```
 
-Wait for the operator pod to be running:
+Then, in the OpenShift console:
+
+- Go to **Operators → Installed Operators**
+- You should see **WebServer Operator** in the `webserver-operator-system` namespace.
+- Click into it to view its provided API: **WebServer (example.com/v1alpha1)**.
+
+### Option B – operator-sdk helper (dev/test)
 
 ```bash
-oc get pods -n webserver-operator-system
+operator-sdk run bundle quay.io/philip860/webserver-operator-bundle:v1.0.0
 ```
 
-## Access from the OpenShift Web Console
+This will create a CatalogSource & Subscription automatically.
 
-With the CRD and operator installed, the operator is accessible via the
-standard OpenShift UI for custom resources:
+## 4. Using the WebServer CRD from the Web Console
 
-- Go to **Administration → CustomResourceDefinitions** and search for
-  `WebServer` or `webservers.example.com`.
-  - Click into the CRD and use **Create WebServer** to create instances
-    via YAML or form view.
-- Go to **Home → Search**, change **Resources** to `WebServer`, and you'll
-  see your `WebServer` instances (e.g. `my-webserver`). Click on one to
-  view/edit it.
+With the operator installed via OLM:
 
-That flow is how you manage this operator and its CRs via the GUI.
+1. Go to **Operators → Installed Operators → WebServer Operator**.
+2. Click the **WebServer** API under "Provided APIs".
+3. Click **Create WebServer**.
+4. The form will show:
+   - **Web Server Type** (dropdown: `nginx` or `apache`)
+   - **Replicas** (number)
+   - **Container Port**
+   - **Custom Image** (optional)
+5. Submit the form.
 
-> Important:
-> This manifest-based install does **not** create an entry under
-> **Operators → Installed Operators** because that view is driven by the
-> Operator Lifecycle Manager (OLM) and requires bundle/Subscription
-> metadata.
->
-> For home lab or non-OLM usage, installing via YAML like this is
-> completely fine and the CRD + CRs remain fully accessible in the GUI.
->
-> If you later want it to appear under **Installed Operators**, you'll
-> package this as an OLM bundle (ClusterServiceVersion, CatalogSource,
-> Subscription). The runtime image will still be
-> `quay.io/philip860/webserver-operator:latest`.
+The operator will:
 
-## Create a WebServer instance
+- Create/update a `Deployment` with the selected web server.
+- Expose it via a `Service` (port 80 → container port).
+- Create an OpenShift `Route` (edge TLS).
+
+## 5. CLI Example: Create WebServer via YAML
 
 ```bash
-oc apply -f deploy/sample_webserver.yaml
+cat <<EOF | oc apply -f -
+apiVersion: example.com/v1alpha1
+kind: WebServer
+metadata:
+  name: my-webserver
+  namespace: default
+spec:
+  type: nginx
+  replicas: 2
+  port: 8080
+EOF
 ```
-
-This will create:
-
-- a Deployment running either NGINX or Apache (based on `spec.type`)
-- a Service exposing port 80
-- a Route (edge-terminated TLS) pointing at the Service
 
 Check resources:
 
 ```bash
-oc get webservers.example.com
-oc get deploy,svc,route
+oc get webservers.example.com -A
+oc get deploy,svc,route -n default
 ```
 
-To switch the running web server type:
+Switch from NGINX to Apache:
 
 ```bash
 oc patch webserver my-webserver -n default --type=merge -p '{

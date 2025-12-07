@@ -4,11 +4,9 @@ metadata:
   name: webserver-operator
   namespace: webserver-operator-system
 rules:
-  # Watch & manage CRs
   - apiGroups: ["example.com"]
     resources: ["webservers", "webservers/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Manage workloads
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

@@ -7,6 +7,7 @@ spec:
   scope: Namespaced
   names:
     kind: WebServer
+    listKind: WebServerList
     plural: webservers
     singular: webserver
     shortNames:
@@ -27,17 +28,32 @@ spec:
                   enum:
                     - nginx
                     - apache
-                  description: "Which web server to deploy"
+                  title: "Web Server Type"
+                  description: "Select which web server to deploy."
+                  x-descriptors:
+                    - "urn:alm:descriptor:com.tectonic.ui:select:nginx"
+                    - "urn:alm:descriptor:com.tectonic.ui:select:apache"
                 replicas:
                   type: integer
                   minimum: 1
                   default: 1
-                image:
-                  type: string
-                  description: "Optional override container image"
+                  title: "Replicas"
+                  description: "Number of pod replicas."
+                  x-descriptors:
+                    - "urn:alm:descriptor:com.tectonic.ui:number"
                 port:
                   type: integer
                   default: 8080
+                  title: "Container Port"
+                  description: "Port on which the web server listens."
+                  x-descriptors:
+                    - "urn:alm:descriptor:com.tectonic.ui:text"
+                image:
+                  type: string
+                  title: "Custom Image"
+                  description: "Optional override container image."
+                  x-descriptors:
+                    - "urn:alm:descriptor:com.tectonic.ui:text"
               required:
                 - type
             status:
@@ -47,3 +63,5 @@ spec:
                   type: string
                 message:
                   type: string
+      subresources:
+        status: {}

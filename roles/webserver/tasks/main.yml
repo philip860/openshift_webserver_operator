@@ -1,0 +1,5 @@
+---
+# Placeholder role in case you want to move logic from playbook into a role
+- name: Debug WebServer spec
+  debug:
+    msg: "WebServer spec is {{ spec }}"
