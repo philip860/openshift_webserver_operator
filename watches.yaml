@@ -3,3 +3,13 @@
   group: example.com
   kind: WebServer
   playbook: playbooks/webserver.yml
+
+  # Let the Ansible Operator manage .status for the CR
+  manageStatus: true
+
+  # Watch and reconcile on changes to dependent resources
+  watchDependentResources: true
+
+  # Finalizer so we can run the delete/cleanup block in the playbook
+  finalizer:
+    name: webserver.finalizers.example.com
