@@ -7,10 +7,10 @@
 
     # Normalize type to lowercase for consistent comparison
     server_type:    "{{ (spec.type | default('nginx')) | lower }}"
-    replicas:       "{{ spec.replicas | default(1) | int }}"
 
-    # Use a non-reserved var name for the container port and coerce to int
-    container_port: "{{ spec.port | default(8080) | int }}"
+    # Keep as strings here; we'll cast with !!int in the manifest
+    replicas:       "{{ (spec.replicas | default(1)) if (spec is defined) else 1 }}"
+    container_port: "{{ (spec.port     | default(8080)) if (spec is defined) else 8080 }}"
 
     # OpenShift-friendly default images (non-root UBI)
     nginx_image_default:  "registry.access.redhat.com/ubi8/nginx-120"
@@ -53,7 +53,7 @@
             container_image: >-
               {{ (
                   spec.image
-                  if (spec.image is defined and (spec.image | string | length > 0))
+                  if (spec is defined and spec.image is defined and (spec.image | string | length > 0))
                   else default_image
                 ) | trim }}
 
@@ -67,8 +67,8 @@
                 namespace: "{{ webserver_ns }}"
                 labels: "{{ labels }}"
               spec:
-                # Keep this as an integer, but quote the template for YAML parser
-                replicas: "{{ replicas | int }}"
+                # Use YAML int cast so Kubernetes gets a real integer
+                replicas: !!int "{{ replicas }}"
                 selector:
                   matchLabels:
                     app: "{{ webserver_name }}"
@@ -81,8 +81,8 @@
                         image: "{{ container_image }}"
                         ports:
                           - name: http
-                            # Also ensure this is an int
-                            containerPort: "{{ container_port | int }}"
+                            # Also cast to int here (fixes the Unprocessable Entity error)
+                            containerPort: !!int "{{ container_port }}"
                         readinessProbe:
                           httpGet:
                             path: /
@@ -110,8 +110,7 @@
                   app: "{{ webserver_name }}"
                 ports:
                   - name: http
-                    port: 80
-                    # route to the container's named port "http" (container_port)
+                    port: 80      # already an int
                     targetPort: http
                     protocol: TCP
 
@@ -152,29 +151,32 @@
     # DELETE / CLEANUP PATH
     #################################################################
     - block:
-        - name: Delete Route
+        - name: Delete Route (if it exists)
           k8s:
             state: absent
             api_version: route.openshift.io/v1
             kind: Route
             name: "{{ webserver_name }}"
             namespace: "{{ webserver_ns }}"
+          failed_when: false
 
-        - name: Delete Service
+        - name: Delete Service (if it exists)
           k8s:
             state: absent
             api_version: v1
             kind: Service
             name: "{{ webserver_name }}"
             namespace: "{{ webserver_ns }}"
+          failed_when: false
 
-        - name: Delete Deployment
+        - name: Delete Deployment (if it exists)
           k8s:
             state: absent
             api_version: apps/v1
             kind: Deployment
             name: "{{ webserver_name }}"
             namespace: "{{ webserver_ns }}"
+          failed_when: false
 
         - name: Update status to Deleted
           operator_sdk.util.k8s_status:
