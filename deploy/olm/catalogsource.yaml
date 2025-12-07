@@ -7,4 +7,4 @@ spec:
   sourceType: grpc
   image: quay.io/philip860/webserver-operator-bundle:v1.0.0
   displayName: WebServer Operator Catalog
-  publisher: Philip
+  publisher: Philip Duncan (Duncan-Networks)
