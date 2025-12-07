@@ -58,18 +58,6 @@
                 ) | trim }}
 
         #################################################################
-        # Delete any existing Deployment to avoid patch conflicts
-        #################################################################
-        - name: Ensure old Deployment is removed (ignore if missing)
-          k8s:
-            state: absent
-            api_version: apps/v1
-            kind: Deployment
-            name: "{{ webserver_name }}"
-            namespace: "{{ webserver_ns }}"
-          failed_when: false
-
-        #################################################################
         # Build Deployment via YAML + from_yaml (ensures ints, not strings)
         #################################################################
         - name: Build Deployment manifest as YAML
