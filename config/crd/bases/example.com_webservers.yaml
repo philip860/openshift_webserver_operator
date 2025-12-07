@@ -45,9 +45,9 @@ spec:
                 port:
                   type: integer
                   format: int32
-                  default: 8080
+                  default: 80
                   title: "Container Port"
-                  description: "Port on which the web server listens inside the container."
+                  description: "Port the web server listens on inside the container (nginx/httpd default is 80)."
                   x-descriptors:
                     - "urn:alm:descriptor:com.tectonic.ui:text"
                 image:
