@@ -27,14 +27,15 @@ spec:
                   type: string
                   enum:
                     - nginx
-                    - apache
+                    - httpd
                   title: "Web Server Type"
-                  description: "Select which web server to deploy."
+                  description: "Select which web server to deploy (nginx or httpd)."
                   x-descriptors:
                     - "urn:alm:descriptor:com.tectonic.ui:select:nginx"
-                    - "urn:alm:descriptor:com.tectonic.ui:select:apache"
+                    - "urn:alm:descriptor:com.tectonic.ui:select:httpd"
                 replicas:
                   type: integer
+                  format: int32
                   minimum: 1
                   default: 1
                   title: "Replicas"
@@ -43,15 +44,20 @@ spec:
                     - "urn:alm:descriptor:com.tectonic.ui:number"
                 port:
                   type: integer
+                  format: int32
                   default: 8080
                   title: "Container Port"
-                  description: "Port on which the web server listens."
+                  description: "Port on which the web server listens inside the container."
                   x-descriptors:
                     - "urn:alm:descriptor:com.tectonic.ui:text"
                 image:
                   type: string
                   title: "Custom Image"
-                  description: "Optional override container image."
+                  description: >-
+                    Optional override container image. If left empty, a default
+                    image will be used:
+                    nginx -> docker.io/library/nginx:1.27-alpine,
+                    httpd -> docker.io/library/httpd:2.4-alpine.
                   x-descriptors:
                     - "urn:alm:descriptor:com.tectonic.ui:text"
               required:
