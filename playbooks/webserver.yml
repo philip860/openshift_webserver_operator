@@ -1,0 +1,126 @@
+---
+- hosts: localhost
+  gather_facts: false
+  vars:
+    webserver_name: "{{ ansible_operator_meta.name }}"
+    webserver_ns:   "{{ ansible_operator_meta.namespace }}"
+
+    server_type:    "{{ spec.type | default('nginx') }}"
+    replicas:       "{{ spec.replicas | default(1) }}"
+    port:           "{{ spec.port | default(8080) }}"
+
+    nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
+    apache_image_default: "docker.io/library/httpd:2.4-alpine"
+
+  tasks:
+    - name: Pick image based on type
+      set_fact:
+        container_image: >-
+          {% if spec.image is defined and spec.image|length > 0 %}
+            {{ spec.image }}
+          {% else %}
+            {% if server_type == 'apache' %}
+              {{ apache_image_default }}
+            {% else %}
+              {{ nginx_image_default }}
+            {% endif %}
+          {% endif %}
+
+    - name: Set labels
+      set_fact:
+        labels:
+          app.kubernetes.io/name: "{{ webserver_name }}"
+          app.kubernetes.io/instance: "{{ webserver_name }}"
+          app.kubernetes.io/managed-by: "webserver-operator"
+          app: "{{ webserver_name }}"
+
+    #################################################################
+    # Deployment
+    #################################################################
+    - name: Ensure Deployment exists for selected web server
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ webserver_name }}"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+          spec:
+            replicas: "{{ replicas }}"
+            selector:
+              matchLabels:
+                app: "{{ webserver_name }}"
+            template:
+              metadata:
+                labels: "{{ labels }}"
+              spec:
+                containers:
+                  - name: "{{ server_type }}"
+                    image: "{{ container_image }}"
+                    ports:
+                      - containerPort: "{{ port }}"
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: "{{ port }}"
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+
+    #################################################################
+    # Service
+    #################################################################
+    - name: Ensure Service exists
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ webserver_name }}"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+          spec:
+            selector:
+              app: "{{ webserver_name }}"
+            ports:
+              - name: http
+                port: 80
+                targetPort: "{{ port }}"
+                protocol: TCP
+
+    #################################################################
+    # Route (OpenShift)
+    #################################################################
+    - name: Ensure Route exists
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: route.openshift.io/v1
+          kind: Route
+          metadata:
+            name: "{{ webserver_name }}"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+          spec:
+            to:
+              kind: Service
+              name: "{{ webserver_name }}"
+            port:
+              targetPort: http
+            tls:
+              termination: edge
+
+    #################################################################
+    # Update CR status
+    #################################################################
+    - name: Set status to Ready
+      operator_sdk.util.k8s_status:
+        api_version: example.com/v1alpha1
+        kind: WebServer
+        name: "{{ webserver_name }}"
+        namespace: "{{ webserver_ns }}"
+        status:
+          phase: Ready
+          message: "Deployed {{ server_type }} with {{ replicas }} replica(s) on port {{ port }}"

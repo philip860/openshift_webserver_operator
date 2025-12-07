@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webserver-operator
+  namespace: webserver-operator-system
+  labels:
+    name: webserver-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: webserver-operator
+  template:
+    metadata:
+      labels:
+        name: webserver-operator
+    spec:
+      serviceAccountName: webserver-operator
+      containers:
+        - name: ansible-operator
+          image: "quay.io/CHANGE_ME/webserver-operator:latest"
+          imagePullPolicy: Always
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['olm.targetNamespaces']
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: "webserver-operator"
+      # For simple, non-OLM install you can hardcode WATCH_NAMESPACE or set it via env
