@@ -8,7 +8,9 @@
     # Normalize type to lowercase for consistent comparison
     server_type:    "{{ (spec.type | default('nginx')) | lower }}"
     replicas:       "{{ spec.replicas | default(1) }}"
-    port:           "{{ spec.port | default(8080) }}"
+
+    # DEFAULT PORT: 80 (matches nginx/httpd defaults)
+    port:           "{{ spec.port | default(80) }}"
 
     # Default images (no whitespace!)
     nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
@@ -74,11 +76,13 @@
                       - name: "{{ server_type }}"
                         image: "{{ container_image }}"
                         ports:
-                          - containerPort: "{{ port }}"
+                          - name: http
+                            containerPort: "{{ port | int }}"
                         readinessProbe:
                           httpGet:
                             path: /
-                            port: "{{ port }}"
+                            # use the named port, avoids mismatch issues
+                            port: http
                           initialDelaySeconds: 5
                           periodSeconds: 10
 
@@ -98,7 +102,8 @@
                 ports:
                   - name: http
                     port: 80
-                    targetPort: "{{ port }}"
+                    # route to the container's named port "http"
+                    targetPort: http
                     protocol: TCP
 
         - name: Ensure Route exists
@@ -131,6 +136,7 @@
               message: >-
                 Deployed {{ server_type }} using image {{ container_image }}
                 with {{ replicas }} replica(s) on port {{ port }}
+
       when: not being_deleted
 
     #################################################################
