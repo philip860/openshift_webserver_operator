@@ -70,15 +70,18 @@
                 containers:
                   - name: {{ server_type }}
                     image: {{ container_image }}
-                    # IMPORTANT: bypass S2I entrypoint and run nginx directly
+                    # IMPORTANT: symlink nginx logs to stdout/stderr, then run nginx in foreground
                     command:
-                      - nginx
-                      - "-g"
-                      - "daemon off;"
+                      - /bin/bash
+                      - -c
+                      - |
+                        ln -sf /dev/stdout /var/log/nginx/access.log
+                        ln -sf /dev/stderr /var/log/nginx/error.log
+                        nginx -g 'daemon off;'
                     ports:
                       - name: http
                         containerPort: {{ container_port | int }}
-                    # Use TCP socket probes so 403 on "/" doesn't kill the pod
+                    # TCP probes so we don't care about HTTP 403/401, only that port is open
                     readinessProbe:
                       tcpSocket:
                         port: {{ container_port | int }}
