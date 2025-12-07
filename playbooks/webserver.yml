@@ -70,18 +70,16 @@
                 containers:
                   - name: {{ server_type }}
                     image: {{ container_image }}
-                    # IMPORTANT: symlink nginx logs to stdout/stderr, then run nginx in foreground
+                    # Run nginx in foreground and send logs to stdout/stderr
                     command:
-                      - /bin/bash
+                      - /bin/sh
                       - -c
                       - |
-                        ln -sf /dev/stdout /var/log/nginx/access.log
-                        ln -sf /dev/stderr /var/log/nginx/error.log
-                        nginx -g 'daemon off;'
+                        nginx -g 'daemon off; error_log /dev/stderr info; access_log /dev/stdout;'
                     ports:
                       - name: http
                         containerPort: {{ container_port | int }}
-                    # TCP probes so we don't care about HTTP 403/401, only that port is open
+                    # TCP probes: just confirm the port is open
                     readinessProbe:
                       tcpSocket:
                         port: {{ container_port | int }}
