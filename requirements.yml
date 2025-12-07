@@ -1,5 +1,9 @@
 ---
 collections:
   - name: kubernetes.core
-    # You can pin a version if you want, but this is fine:
+    # Optional: pin a version if you want
     # version: ">=2.4.0"
+
+  - name: operator_sdk.util
+    # Optional: you can pin a version here as well
+    # version: ">=0.0.0"
