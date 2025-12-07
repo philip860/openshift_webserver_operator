@@ -9,12 +9,12 @@
     server_type:    "{{ (spec.type | default('nginx')) | lower }}"
     replicas:       "{{ spec.replicas | default(1) }}"
 
-    # DEFAULT PORT: 80 (matches nginx/httpd defaults)
-    port:           "{{ spec.port | default(80) }}"
+    # DEFAULT PORT: 8080 (matches UBI nginx/httpd defaults)
+    port:           "{{ spec.port | default(8080) }}"
 
-    # Default images (no whitespace!)
-    nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
-    apache_image_default: "docker.io/library/httpd:2.4-alpine"
+    # OpenShift-friendly default images (non-root UBI)
+    nginx_image_default:  "registry.access.redhat.com/ubi8/nginx-120"
+    apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
 
   tasks:
     #################################################################
@@ -42,7 +42,9 @@
     - block:
         - name: Determine default image for server type
           set_fact:
-            default_image: "{{ apache_image_default if server_type in ['apache', 'httpd'] else nginx_image_default }}"
+            default_image: >-
+              {{ apache_image_default if server_type in ['apache', 'httpd']
+                 else nginx_image_default }}
 
         - name: Pick final container image (override + trim)
           set_fact:
@@ -102,7 +104,7 @@
                 ports:
                   - name: http
                     port: 80
-                    # route to the container's named port "http"
+                    # route to the container's named port "http" (8080)
                     targetPort: http
                     protocol: TCP
 
