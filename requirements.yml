@@ -1,0 +1,5 @@
+---
+collections:
+  - name: kubernetes.core
+    # You can pin a version if you want, but this is fine:
+    # version: ">=2.4.0"
