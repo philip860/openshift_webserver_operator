@@ -2,12 +2,17 @@ FROM quay.io/operator-framework/ansible-operator:v1.34.1
 
 USER 0
 
-# Ensure we are in the correct working dir
+# This is the directory ansible-operator expects to run from
+ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# Copy operator configuration into the correct directory
-COPY watches.yaml ${ANSIBLE_OPERATOR_DIR}/watches.yaml
-COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
-COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
+# Copy the operator configuration into the image
+# These paths MUST exist in your build context:
+#   ./watches.yaml
+#   ./playbooks/
+#   ./roles/
+COPY watches.yaml ./watches.yaml
+COPY playbooks/ ./playbooks/
+COPY roles/ ./roles/
 
 USER ${ANSIBLE_USER_ID}
