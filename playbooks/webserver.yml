@@ -1,24 +1,28 @@
 ---
 - hosts: localhost
   gather_facts: false
+
   vars:
     webserver_name: "{{ ansible_operator_meta.name }}"
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
     # Normalize type to lowercase for consistent comparison
-    server_type:    "{{ (spec.type | default('nginx')) | lower }}"
+    server_type:    "{{ (spec.type | default('nginx')) | lower | trim }}"
 
-    # Raw values from the CR spec (we'll cast to int where we build the manifest)
+    # Raw values from the CR spec (cast to int later in the manifest)
     replicas:       "{{ spec.replicas | default(1) }}"
-    container_port: "{{ spec.port | default(8080) }}"
+    container_port: "{{ spec.port | default(80) }}"
 
-    # OpenShift-friendly default images (non-root UBI)
-    nginx_image_default:  "registry.access.redhat.com/ubi8/nginx-120"
-    apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
+    # Default images:
+    # - Simple, log to stdout/stderr by default
+    # - Compatible with OpenShift when appropriate SCCs are applied
+    #   (You can swap these to internal imagestreams if desired.)
+    nginx_image_default:  "docker.io/library/nginx:alpine"
+    apache_image_default: "docker.io/library/httpd:2.4-alpine"
 
   tasks:
     #################################################################
-    # Compute labels and image
+    # Compute labels and pick image
     #################################################################
 
     - name: Set labels for this WebServer
@@ -29,18 +33,22 @@
           app.kubernetes.io/managed-by: "webserver-operator"
           app: "{{ webserver_name }}"
 
-    - name: Determine default image for server type
+    - name: Determine default image for server type (nginx vs httpd/apache)
       set_fact:
         default_image: >-
           {{ apache_image_default if server_type in ['apache', 'httpd']
              else nginx_image_default }}
 
-    - name: Pick final container image (override + trim)
+    - name: Pick final container image (spec.image override, else default)
       set_fact:
         container_image: >-
           {{ (
               spec.image
-              if (spec is defined and spec.image is defined and (spec.image | string | length > 0))
+              if (
+                   spec is defined
+                   and spec.image is defined
+                   and (spec.image | string | trim | length > 0)
+                 )
               else default_image
             ) | trim }}
 
@@ -70,15 +78,12 @@
                 containers:
                   - name: {{ server_type }}
                     image: {{ container_image }}
-                    # Run nginx in foreground (Red Hat docs recommend this)
-                    command:
-                      - nginx
-                      - "-g"
-                      - "daemon off;"
+                    # Use default CMD from image; nginx:alpine and httpd:2.4-alpine
+                    # both log to stdout/stderr by default when run in foreground.
                     ports:
                       - name: http
                         containerPort: {{ container_port | int }}
-                    # TCP probes: we just verify the port is open
+                    # TCP probes: only check that the port is open
                     readinessProbe:
                       tcpSocket:
                         port: {{ container_port | int }}
