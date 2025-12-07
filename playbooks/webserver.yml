@@ -11,14 +11,14 @@
 
     # Raw values from the CR spec (cast to int later in the manifest)
     replicas:       "{{ spec.replicas | default(1) }}"
-    container_port: "{{ spec.port | default(80) }}"
+    # For UBI nginx/httpd, 8080 is a common non-root listen port; you can
+    # adjust or drive this from the CR
+    container_port: "{{ spec.port | default(8080) }}"
 
-    # Default images:
-    # - Simple, log to stdout/stderr by default
-    # - Compatible with OpenShift when appropriate SCCs are applied
-    #   (You can swap these to internal imagestreams if desired.)
-    nginx_image_default:  "docker.io/library/nginx:alpine"
-    apache_image_default: "docker.io/library/httpd:2.4-alpine"
+    # OpenShift-friendly default images (UBI-based)
+    # These are designed to run as non-root on OpenShift with restricted SCC.
+    nginx_image_default:  "registry.access.redhat.com/ubi8/nginx-120"
+    apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
 
   tasks:
     #################################################################
@@ -78,8 +78,8 @@
                 containers:
                   - name: {{ server_type }}
                     image: {{ container_image }}
-                    # Use default CMD from image; nginx:alpine and httpd:2.4-alpine
-                    # both log to stdout/stderr by default when run in foreground.
+                    # Let the UBI images use their default command/entrypoint.
+                    # They are built to work with OpenShift (non-root).
                     ports:
                       - name: http
                         containerPort: {{ container_port | int }}
