@@ -8,7 +8,7 @@
     # Normalize type to lowercase for consistent comparison
     server_type:    "{{ (spec.type | default('nginx')) | lower }}"
 
-    # Raw values from the CR spec (we'll cast to int later in JSON)
+    # Raw values from the CR spec (we'll cast to int where needed)
     replicas:       "{{ spec.replicas | default(1) }}"
     container_port: "{{ spec.port | default(8080) }}"
 
@@ -70,60 +70,43 @@
           failed_when: false
 
         #################################################################
-        # Build Deployment as JSON string, then parse via from_json
+        # Build Deployment as a native dict (no from_json needed)
         #################################################################
-        - name: Build Deployment JSON
+        - name: Build Deployment definition
           set_fact:
-            deployment_json: >-
-              {
-                "apiVersion": "apps/v1",
-                "kind": "Deployment",
-                "metadata": {
-                  "name": "{{ webserver_name }}",
-                  "namespace": "{{ webserver_ns }}",
-                  "labels": {{ labels | to_json }}
-                },
-                "spec": {
-                  "replicas": {{ replicas | int }},
-                  "selector": {
-                    "matchLabels": {
-                      "app": "{{ webserver_name }}"
-                    }
-                  },
-                  "template": {
-                    "metadata": {
-                      "labels": {{ labels | to_json }}
-                    },
-                    "spec": {
-                      "containers": [
-                        {
-                          "name": "{{ server_type }}",
-                          "image": "{{ container_image }}",
-                          "ports": [
-                            {
-                              "name": "http",
-                              "containerPort": {{ container_port | int }}
-                            }
-                          ],
-                          "readinessProbe": {
-                            "httpGet": {
-                              "path": "/",
-                              "port": "http"
-                            },
-                            "initialDelaySeconds": 5,
-                            "periodSeconds": 10
-                          }
-                        }
-                      ]
-                    }
-                  }
-                }
-              }
+            deployment_definition:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: "{{ webserver_name }}"
+                namespace: "{{ webserver_ns }}"
+                labels: "{{ labels }}"
+              spec:
+                replicas: "{{ replicas | int }}"
+                selector:
+                  matchLabels:
+                    app: "{{ webserver_name }}"
+                template:
+                  metadata:
+                    labels: "{{ labels }}"
+                  spec:
+                    containers:
+                      - name: "{{ server_type }}"
+                        image: "{{ container_image }}"
+                        ports:
+                          - name: http
+                            containerPort: "{{ container_port | int }}"
+                        readinessProbe:
+                          httpGet:
+                            path: /
+                            port: http
+                          initialDelaySeconds: 5
+                          periodSeconds: 10
 
         - name: Ensure Deployment exists for selected web server
           k8s:
             state: present
-            definition: "{{ deployment_json | from_json }}"
+            definition: "{{ deployment_definition }}"
 
         - name: Ensure Service exists
           k8s:
@@ -218,5 +201,5 @@
               message: >-
                 WebServer {{ webserver_name }} deleted; associated Deployment,
                 Service, and Route have been removed.
-          ignore_errors: true     # ← key change so finalizer doesn't fail
+          ignore_errors: true
       when: being_deleted
