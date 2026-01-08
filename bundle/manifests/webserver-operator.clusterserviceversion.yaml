@@ -12,7 +12,7 @@ metadata:
 
     # Pin the operator image (digest required for certification / preflight checks)
     # Replace REPLACE_WITH_OPERATOR_IMAGE_DIGEST with the real sha256 digest.
-    containerImage: "quay.io/philip860/webserver-operator@REPLACE_WITH_OPERATOR_IMAGE_DIGEST"
+    containerImage: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
 
     # Required feature flags (must be present and set to "true" or "false")
     features.operators.openshift.io/disconnected: "false"
@@ -68,7 +68,7 @@ spec:
   # Ensure all image refs are explicitly listed and pinned
   relatedImages:
     - name: webserver-operator
-      image: "quay.io/philip860/webserver-operator@sha256:5f95846d0a6101f02ef18ca037215aa3d65181da203a4bce354ef81e4f295f13"
+      image: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
 
   install:
     strategy: deployment
@@ -88,7 +88,7 @@ spec:
                 serviceAccountName: webserver-operator
                 containers:
                   - name: ansible-operator
-                    image: "quay.io/philip860/webserver-operator@sha256:5f95846d0a6101f02ef18ca037215aa3d65181da203a4bce354ef81e4f295f13"
+                    image: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
                     imagePullPolicy: IfNotPresent
                     env:
                       - name: WATCH_NAMESPACE
