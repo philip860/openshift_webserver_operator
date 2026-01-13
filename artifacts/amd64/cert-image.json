@@ -1,0 +1,212 @@
+{
+    "certified": false,
+    "deleted": false,
+    "docker_image_digest": "sha256:bfef85d90cfd0580886eaa42be32a9219f7855e0518db892d7b9ca44daa06e1c",
+    "docker_image_id": "sha256:3eb1d233140967673395dc88ae316bbf188c093ae0453651f8419c56855f24b9",
+    "image_id": "sha256:bfef85d90cfd0580886eaa42be32a9219f7855e0518db892d7b9ca44daa06e1c",
+    "parsed_data": {
+        "architecture": "amd64",
+        "created": "2026-01-10 17:01:35.351234079 +0000 UTC",
+        "image_id": "sha256:bfef85d90cfd0580886eaa42be32a9219f7855e0518db892d7b9ca44daa06e1c",
+        "labels": [
+            {
+                "name": "description",
+                "value": "An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
+            },
+            {
+                "name": "distribution-scope",
+                "value": "public"
+            },
+            {
+                "name": "io.buildah.version",
+                "value": "1.33.8"
+            },
+            {
+                "name": "io.k8s.display-name",
+                "value": "Red Hat Universal Base Image 8"
+            },
+            {
+                "name": "maintainer",
+                "value": "Phil Duncan \u003cphilipduncan860@gmail.com\u003e"
+            },
+            {
+                "name": "release",
+                "value": "1"
+            },
+            {
+                "name": "summary",
+                "value": "Kubernetes operator to deploy and manage web workloads"
+            },
+            {
+                "name": "url",
+                "value": "https://access.redhat.com/containers/#/registry.access.redhat.com/ubi8/images/8.9-1107"
+            },
+            {
+                "name": "build-date",
+                "value": "2024-01-03T02:09:22"
+            },
+            {
+                "name": "git_commit",
+                "value": "devel"
+            },
+            {
+                "name": "io.k8s.description",
+                "value": "The Universal Base Image is designed and engineered to be the base layer for all of your containerized applications, middleware and utilities. This base image is freely redistributable, but Red Hat only supports Red Hat technologies through subscriptions for Red Hat products. This image is maintained by Red Hat and updated regularly."
+            },
+            {
+                "name": "io.openshift.expose-services",
+                "value": ""
+            },
+            {
+                "name": "vcs-type",
+                "value": "git"
+            },
+            {
+                "name": "com.redhat.license_terms",
+                "value": "https://www.redhat.com/en/about/red-hat-end-user-license-agreements#UBI"
+            },
+            {
+                "name": "io.openshift.tags",
+                "value": "base rhel8"
+            },
+            {
+                "name": "vcs-ref",
+                "value": "16023543dff146b00b5868ad23202e2af8b40a8a"
+            },
+            {
+                "name": "version",
+                "value": "1.0.31"
+            },
+            {
+                "name": "architecture",
+                "value": "x86_64"
+            },
+            {
+                "name": "com.redhat.component",
+                "value": "ubi8-container"
+            },
+            {
+                "name": "name",
+                "value": "webserver-operator"
+            },
+            {
+                "name": "vendor",
+                "value": "Duncan Networks"
+            }
+        ],
+        "layers": [
+            "sha256:aa42ef82fc0a877a3d1d411ac1a4a1eb6fdd883305b2eb045e380c282713ed29",
+            "sha256:9b108f7e18c308c6e694520b9a01a31c74675a937827a02b5ebf568da4baec68",
+            "sha256:8d0bec7f5da11704ef0c49e7a96eaec9708af387cc1005127e0602c867304431",
+            "sha256:deddd829a501d1bd053f4424fff0b67bf8fbd78cca254c78aedc854bc05a59af",
+            "sha256:817681cfb5ebcb9e70481f555b841471030f1402fcfc57376f085eeb1259bb9a",
+            "sha256:071676df1f69ff48d00cb424beb7143215dabcf2c57f51c2467f0705e8a44b92",
+            "sha256:041ed3e55cf3eb71e7dd87e60b3fbc31a24ebfe381dc6c9c2fa234f98fc104fb",
+            "sha256:ddced7768b511a4656361310ba7186517c8c406c0945ea1a4e1f1629f42b8eee",
+            "sha256:bd9ddc54bea929a22b334e73e026d4136e5b73f5cc29942896c72e4ece69b13d",
+            "sha256:e34227cfdd5d7e0f9d03fdb35eb92f0fb0284a0e17b235f2b24809051c336705",
+            "sha256:3831d654551c7358114a971c74203fa7c2288f3c866549955cbcde05c7c8a5e9",
+            "sha256:bbe22515ed41690ace551b74fa0e4fbb4dfe68c7d7151409102d2b909d47a053",
+            "sha256:0de627576e4ea27666b6a584251cf80e2574fb8e96ed4c8ce4a8c9a0138f581b",
+            "sha256:34e37d8b11466a309ae925e2068480e04935f08a8996d3b317e08311510a78f0",
+            "sha256:0b4a285acc879f66886eecddb496d7952ded6f77cd804ceceb59d7d7993c6a63",
+            "sha256:924b81ec53e6c34048f344d9cffefcf048587db21335fe33d70dc38455d8af0f",
+            "sha256:59f71e8e5383b42af2d95d42c447152f169109a3d33a76c32f92583e5543b5a5",
+            "sha256:c7a0ea7dbe072fd2654e2a02858d858474962c40db10cefa98ea3fda3c96ebdc"
+        ],
+        "os": "linux",
+        "size": 3271,
+        "uncompressed_layer_sizes": [
+            {
+                "layer_id": "sha256:86426b9e591db2cdd8eba8085aa38b705422152b49960696308d988f33f3d741",
+                "size_bytes": 212773376
+            },
+            {
+                "layer_id": "sha256:4cb0b42c8dfc14d4d6b3dd2cd4eeab1ee4b62564fb6617491726388e5c233e36",
+                "size_bytes": 4096
+            },
+            {
+                "layer_id": "sha256:f45a19682785f75f5fff521c21df7d31e9e1a3db976a65b290d87540418336ff",
+                "size_bytes": 162416128
+            },
+            {
+                "layer_id": "sha256:fe90184cd39e6b0e96c29ae6d55795655f2ce6be97cee920dd76703220520182",
+                "size_bytes": 20150272
+            },
+            {
+                "layer_id": "sha256:4820ceed85f69461874fe6d88f6ab9c5950ca93c5fa40771a123269c4211345d",
+                "size_bytes": 96410624
+            },
+            {
+                "layer_id": "sha256:4953a3b3720d56e2deaf8f2fa79b66736e29cb357d444f3169ff26a503d2707e",
+                "size_bytes": 70656
+            },
+            {
+                "layer_id": "sha256:03d39f9aada83aa5440b334e04e500d5437e8512f86a1a62e1cfe52b80a8ed97",
+                "size_bytes": 25600
+            },
+            {
+                "layer_id": "sha256:90712e2a5f49e184ce2649e0b761cab9008e76f71d42d734cf950b4ff2204e1d",
+                "size_bytes": 5120
+            },
+            {
+                "layer_id": "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+                "size_bytes": 1024
+            },
+            {
+                "layer_id": "sha256:be111ef419803a57687b33eacdaa827d59e372fa620fae77e592550aa5f4e485",
+                "size_bytes": 60924416
+            },
+            {
+                "layer_id": "sha256:5dabc940b45b239d23d971d6b96cc0a7932568d3467d724f064b035d276294d0",
+                "size_bytes": 3584
+            },
+            {
+                "layer_id": "sha256:d9db25b798365a7e03067e8dc5f5746bd1997885acb8860d2bf23f137ff6421e",
+                "size_bytes": 2560
+            },
+            {
+                "layer_id": "sha256:48fcedb70ac661a24873f31bcd876208c3982cdc8854270553a8bd60eec52e61",
+                "size_bytes": 2560
+            },
+            {
+                "layer_id": "sha256:f054ccf67166346f89ec14dc0c07652c8a5fb6c6c489586aad96adab4211d2c9",
+                "size_bytes": 2861056
+            },
+            {
+                "layer_id": "sha256:e12ff723d615ee5aa81ef5ad717c6603d815d3b72860723749f7cdc1af752913",
+                "size_bytes": 3072
+            },
+            {
+                "layer_id": "sha256:e588a6501c8b1c7eb22ccd5de1a862ddeb5cd8df606744462a847ad25c383fa8",
+                "size_bytes": 9728
+            },
+            {
+                "layer_id": "sha256:f80f7cffe99225e0ce00c71302078b5730444082e57fb33a67da53893b859503",
+                "size_bytes": 7680
+            },
+            {
+                "layer_id": "sha256:ce5a5f9a0eee7f09d59fa4a2d791dd5f24ad2769eb7a87f337c89e36a2af7b48",
+                "size_bytes": 17920
+            }
+        ]
+    },
+    "architecture": "amd64",
+    "raw_config": "{\"created\":\"2026-01-10T17:01:35.351234079Z\",\"architecture\":\"amd64\",\"os\":\"linux\",\"config\":{\"User\":\"1001\",\"Env\":[\"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\",\"container=oci\",\"TINI_VERSION=v0.19.0\",\"HOME=/opt/ansible\",\"USER_NAME=ansible\",\"USER_UID=1001\",\"ANSIBLE_OPERATOR_DIR=/opt/ansible-operator\",\"ANSIBLE_USER_ID=1001\"],\"Entrypoint\":[\"/tini\",\"--\",\"/usr/local/bin/ansible-operator\",\"run\",\"--watches-file=./watches.yaml\"],\"WorkingDir\":\"/opt/ansible-operator\",\"Labels\":{\"architecture\":\"x86_64\",\"build-date\":\"2024-01-03T02:09:22\",\"com.redhat.component\":\"ubi8-container\",\"com.redhat.license_terms\":\"https://www.redhat.com/en/about/red-hat-end-user-license-agreements#UBI\",\"description\":\"An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes.\",\"distribution-scope\":\"public\",\"git_commit\":\"devel\",\"io.buildah.version\":\"1.33.8\",\"io.k8s.description\":\"The Universal Base Image is designed and engineered to be the base layer for all of your containerized applications, middleware and utilities. This base image is freely redistributable, but Red Hat only supports Red Hat technologies through subscriptions for Red Hat products. This image is maintained by Red Hat and updated regularly.\",\"io.k8s.display-name\":\"Red Hat Universal Base Image 8\",\"io.openshift.expose-services\":\"\",\"io.openshift.tags\":\"base rhel8\",\"maintainer\":\"Phil Duncan \\u003cphilipduncan860@gmail.com\\u003e\",\"name\":\"webserver-operator\",\"release\":\"1\",\"summary\":\"Kubernetes operator to deploy and manage web workloads\",\"url\":\"https://access.redhat.com/containers/#/registry.access.redhat.com/ubi8/images/8.9-1107\",\"vcs-ref\":\"16023543dff146b00b5868ad23202e2af8b40a8a\",\"vcs-type\":\"git\",\"vendor\":\"Duncan Networks\",\"version\":\"1.0.31\"}},\"rootfs\":{\"type\":\"layers\",\"diff_ids\":[\"sha256:86426b9e591db2cdd8eba8085aa38b705422152b49960696308d988f33f3d741\",\"sha256:4cb0b42c8dfc14d4d6b3dd2cd4eeab1ee4b62564fb6617491726388e5c233e36\",\"sha256:f45a19682785f75f5fff521c21df7d31e9e1a3db976a65b290d87540418336ff\",\"sha256:fe90184cd39e6b0e96c29ae6d55795655f2ce6be97cee920dd76703220520182\",\"sha256:4820ceed85f69461874fe6d88f6ab9c5950ca93c5fa40771a123269c4211345d\",\"sha256:4953a3b3720d56e2deaf8f2fa79b66736e29cb357d444f3169ff26a503d2707e\",\"sha256:03d39f9aada83aa5440b334e04e500d5437e8512f86a1a62e1cfe52b80a8ed97\",\"sha256:90712e2a5f49e184ce2649e0b761cab9008e76f71d42d734cf950b4ff2204e1d\",\"sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef\",\"sha256:be111ef419803a57687b33eacdaa827d59e372fa620fae77e592550aa5f4e485\",\"sha256:5dabc940b45b239d23d971d6b96cc0a7932568d3467d724f064b035d276294d0\",\"sha256:d9db25b798365a7e03067e8dc5f5746bd1997885acb8860d2bf23f137ff6421e\",\"sha256:48fcedb70ac661a24873f31bcd876208c3982cdc8854270553a8bd60eec52e61\",\"sha256:f054ccf67166346f89ec14dc0c07652c8a5fb6c6c489586aad96adab4211d2c9\",\"sha256:e12ff723d615ee5aa81ef5ad717c6603d815d3b72860723749f7cdc1af752913\",\"sha256:e588a6501c8b1c7eb22ccd5de1a862ddeb5cd8df606744462a847ad25c383fa8\",\"sha256:f80f7cffe99225e0ce00c71302078b5730444082e57fb33a67da53893b859503\",\"sha256:ce5a5f9a0eee7f09d59fa4a2d791dd5f24ad2769eb7a87f337c89e36a2af7b48\"]},\"history\":[{\"created\":\"2024-01-03T02:29:57.796288933Z\",\"created_by\":\"/bin/sh -c #(nop) ADD file:687b02017564f010244bed83b7b5bce3ce65bc910a889690e040ec57a8d06b04 in / \",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.351118826Z\",\"created_by\":\"/bin/sh -c mv -f /etc/yum.repos.d/ubi.repo /tmp || :\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.562799249Z\",\"created_by\":\"/bin/sh -c #(nop) ADD file:ecc29a1455ca1b7c82018555e16e2e802135974523df6748e431f8707e759ddd in /tmp/tls-ca-bundle.pem \",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.839840512Z\",\"created_by\":\"/bin/sh -c #(nop) ADD multi:d5b484313b227467de5b0ffa3d38c602093c421f02ba060b0fc9353e374f6517 in /etc/yum.repos.d/ \",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.839881729Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL maintainer=\\\"Red Hat, Inc.\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.839960798Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL com.redhat.component=\\\"ubi8-container\\\"       name=\\\"ubi8\\\"       version=\\\"8.9\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.839985901Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL com.redhat.license_terms=\\\"https://www.redhat.com/en/about/red-hat-end-user-license-agreements#UBI\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840014649Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL summary=\\\"Provides the latest release of Red Hat Universal Base Image 8.\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840096526Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL description=\\\"The Universal Base Image is designed and engineered to be the base layer for all of your containerized applications, middleware and utilities. This base image is freely redistributable, but Red Hat only supports Red Hat technologies through subscriptions for Red Hat products. This image is maintained by Red Hat and updated regularly.\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840126293Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL io.k8s.display-name=\\\"Red Hat Universal Base Image 8\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840140515Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL io.openshift.expose-services=\\\"\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840163017Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL io.openshift.tags=\\\"base rhel8\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840174131Z\",\"created_by\":\"/bin/sh -c #(nop) ENV container oci\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840254997Z\",\"created_by\":\"/bin/sh -c #(nop) ENV PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:58.840274696Z\",\"created_by\":\"/bin/sh -c #(nop) CMD [\\\"/bin/bash\\\"]\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:59.400373219Z\",\"created_by\":\"/bin/sh -c rm -rf /var/log/*\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:59.931561318Z\",\"created_by\":\"/bin/sh -c mkdir -p /var/log/rhsm\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:29:59.931607674Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL release=1107\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:30:00.142682997Z\",\"created_by\":\"/bin/sh -c #(nop) ADD file:81a959366737b2880aa34f21a437cbb70e7051b30b49394141c2b2c6ab984950 in /root/buildinfo/content_manifests/ubi8-container-8.9-1107.json \",\"empty_layer\":true},{\"created\":\"2024-01-03T02:30:00.342912414Z\",\"created_by\":\"/bin/sh -c #(nop) ADD file:4c03af9205f57efee417e1de1c7e72151928810b8a527e1aac3d1e8a5004a07e in /root/buildinfo/Dockerfile-ubi8-8.9-1107 \",\"empty_layer\":true},{\"created\":\"2024-01-03T02:30:00.343066001Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL \\\"distribution-scope\\\"=\\\"public\\\" \\\"vendor\\\"=\\\"Red Hat, Inc.\\\" \\\"build-date\\\"=\\\"2024-01-03T02:09:22\\\" \\\"architecture\\\"=\\\"x86_64\\\" \\\"vcs-type\\\"=\\\"git\\\" \\\"vcs-ref\\\"=\\\"16023543dff146b00b5868ad23202e2af8b40a8a\\\" \\\"io.k8s.description\\\"=\\\"The Universal Base Image is designed and engineered to be the base layer for all of your containerized applications, middleware and utilities. This base image is freely redistributable, but Red Hat only supports Red Hat technologies through subscriptions for Red Hat products. This image is maintained by Red Hat and updated regularly.\\\" \\\"url\\\"=\\\"https://access.redhat.com/containers/#/registry.access.redhat.com/ubi8/images/8.9-1107\\\"\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:30:00.912888565Z\",\"created_by\":\"/bin/sh -c rm -f '/etc/yum.repos.d/repo-9816f.repo' '/etc/yum.repos.d/repo-7a3a9.repo'\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:30:01.443757635Z\",\"created_by\":\"/bin/sh -c rm -f /tmp/tls-ca-bundle.pem\",\"empty_layer\":true},{\"created\":\"2024-01-03T02:30:03.504874238Z\",\"created_by\":\"/bin/sh -c mv -fZ /tmp/ubi.repo /etc/yum.repos.d/ubi.repo || :\"},{\"created\":\"2024-02-19T20:32:16.51019102Z\",\"created_by\":\"ARG TARGETARCH\",\"comment\":\"buildkit.dockerfile.v0\",\"empty_layer\":true},{\"created\":\"2024-02-19T20:32:16.51019102Z\",\"created_by\":\"ARG GIT_COMMIT=devel\",\"comment\":\"buildkit.dockerfile.v0\",\"empty_layer\":true},{\"created\":\"2024-02-19T20:32:16.51019102Z\",\"created_by\":\"LABEL git_commit=devel\",\"comment\":\"buildkit.dockerfile.v0\",\"empty_layer\":true},{\"created\":\"2024-02-19T20:32:16.51019102Z\",\"created_by\":\"RUN |2 TARGETARCH=amd64 GIT_COMMIT=devel /bin/sh -c mkdir -p /etc/ansible   \\u0026\\u0026 echo \\\"localhost ansible_connection=local\\\" \\u003e /etc/ansible/hosts   \\u0026\\u0026 echo '[defaults]' \\u003e /etc/ansible/ansible.cfg   \\u0026\\u0026 echo 'roles_path = /opt/ansible/roles' \\u003e\\u003e /etc/ansible/ansible.cfg   \\u0026\\u0026 echo 'library = /usr/share/ansible/openshift' \\u003e\\u003e /etc/ansible/ansible.cfg # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:32:52.545680779Z\",\"created_by\":\"RUN |2 TARGETARCH=amd64 GIT_COMMIT=devel /bin/sh -c set -e \\u0026\\u0026 yum clean all \\u0026\\u0026 rm -rf /var/cache/yum/*   \\u0026\\u0026 yum update -y   \\u0026\\u0026 yum install -y python39-pip python39-setuptools   \\u0026\\u0026 pip3 install --upgrade pip~=23.3.2   \\u0026\\u0026 pip3 install pipenv==2023.11.15   \\u0026\\u0026 yum clean all   \\u0026\\u0026 rm -rf /var/cache/yum # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:05.69121122Z\",\"created_by\":\"COPY /usr/local/lib64/python3.9/site-packages /usr/local/lib64/python3.9/site-packages # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:07.750898782Z\",\"created_by\":\"COPY /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:07.79251616Z\",\"created_by\":\"COPY /usr/local/bin /usr/local/bin # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:07.79251616Z\",\"created_by\":\"ENV TINI_VERSION=v0.19.0\",\"comment\":\"buildkit.dockerfile.v0\",\"empty_layer\":true},{\"created\":\"2024-02-19T20:34:08.877193255Z\",\"created_by\":\"RUN |2 TARGETARCH=amd64 GIT_COMMIT=devel /bin/sh -c curl -L -o /tini https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-${TARGETARCH}   \\u0026\\u0026 chmod +x /tini \\u0026\\u0026 /tini --version # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:08.877193255Z\",\"created_by\":\"ENV HOME=/opt/ansible USER_NAME=ansible USER_UID=1001\",\"comment\":\"buildkit.dockerfile.v0\",\"empty_layer\":true},{\"created\":\"2024-02-19T20:34:09.38382449Z\",\"created_by\":\"RUN /bin/sh -c echo \\\"${USER_NAME}:x:${USER_UID}:0:${USER_NAME} user:${HOME}:/sbin/nologin\\\" \\u003e\\u003e /etc/passwd   \\u0026\\u0026 mkdir -p ${HOME}/.ansible/tmp   \\u0026\\u0026 chown -R ${USER_UID}:0 ${HOME}   \\u0026\\u0026 chmod -R ug+rwx ${HOME} # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:09.397605755Z\",\"created_by\":\"WORKDIR /opt/ansible\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:09.397605755Z\",\"created_by\":\"USER 1001\",\"comment\":\"buildkit.dockerfile.v0\",\"empty_layer\":true},{\"created\":\"2024-02-19T20:34:09.664296978Z\",\"created_by\":\"COPY ansible-operator /usr/local/bin/ansible-operator # buildkit\",\"comment\":\"buildkit.dockerfile.v0\"},{\"created\":\"2024-02-19T20:34:09.664296978Z\",\"created_by\":\"ENTRYPOINT [\\\"/tini\\\" \\\"--\\\" \\\"/usr/local/bin/ansible-operator\\\" \\\"run\\\" \\\"--watches-file=./watches.yaml\\\"]\",\"comment\":\"buildkit.dockerfile.v0\",\"empty_layer\":true},{\"created\":\"2026-01-10T17:01:05.611378705Z\",\"created_by\":\"/bin/sh -c #(nop) USER 0\",\"comment\":\"FROM quay.io/operator-framework/ansible-operator:v1.34.1\",\"empty_layer\":true},{\"created\":\"2026-01-10T17:01:05.81831583Z\",\"created_by\":\"/bin/sh -c #(nop) ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator\",\"comment\":\"FROM 80eb94af24bb\",\"empty_layer\":true},{\"created\":\"2026-01-10T17:01:05.98459141Z\",\"created_by\":\"/bin/sh -c #(nop) WORKDIR ${ANSIBLE_OPERATOR_DIR}\",\"comment\":\"FROM 9d664688c57d\",\"empty_layer\":true},{\"created\":\"2026-01-10T17:01:06.139596207Z\",\"created_by\":\"/bin/sh -c #(nop) LABEL name=\\\"webserver-operator\\\"       vendor=\\\"Duncan Networks\\\"       maintainer=\\\"Phil Duncan \\u003cphilipduncan860@gmail.com\\u003e\\\"       version=\\\"1.0.31\\\"       release=\\\"1\\\"       summary=\\\"Kubernetes operator to deploy and manage web workloads\\\"       description=\\\"An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes.\\\"\",\"comment\":\"FROM 3f62ad1a5bbd\",\"empty_layer\":true},{\"created\":\"2026-01-10T17:01:07.565488924Z\",\"created_by\":\"/bin/sh -c mkdir -p /licenses\",\"comment\":\"FROM 4eae5a0ed91e\"},{\"created\":\"2026-01-10T17:01:09.000869414Z\",\"created_by\":\"/bin/sh -c printf \\\"See project repository for license and terms.\\\\n\\\" \\u003e /licenses/NOTICE\",\"comment\":\"FROM a582f90cb4f5\"},{\"created\":\"2026-01-10T17:01:11.000308249Z\",\"created_by\":\"/bin/sh -c #(nop) COPY file:0f48aaa38a0b1d6bd9a62fac3b521d44227991aaa17f2dab7447ff9eb3b9c930 in /tmp/requirements.yml \",\"comment\":\"FROM b12f15cf7856\"},{\"created\":\"2026-01-10T17:01:29.000984438Z\",\"created_by\":\"/bin/sh -c ansible-galaxy collection install -r /tmp/requirements.yml       --collections-path /opt/ansible/.ansible/collections  \\u0026\\u0026 chmod -R g+rwX /opt/ansible/.ansible  \\u0026\\u0026 rm -f /tmp/requirements.yml\",\"comment\":\"FROM 4f8296307440\"},{\"created\":\"2026-01-10T17:01:30.047277357Z\",\"created_by\":\"/bin/sh -c #(nop) COPY file:d80ed41337965f37351f4c5c902ee880a570b897f94e6772fc8a8ae5de56b102 in ./watches.yaml \",\"comment\":\"FROM 6f017cda5a8f\"},{\"created\":\"2026-01-10T17:01:31.038601531Z\",\"created_by\":\"/bin/sh -c #(nop) COPY dir:2ba0852adfcc9b76ea9fb96013ff19287547da94c589ec3b1803f5135f726c1d in ./playbooks/ \",\"comment\":\"FROM af6c3f7740a4\"},{\"created\":\"2026-01-10T17:01:33.0004991Z\",\"created_by\":\"/bin/sh -c #(nop) COPY dir:42c73d51564de9cb1edb3596d6381ff9f0d0d452138abd014e9918cb74e58788 in ./roles/ \",\"comment\":\"FROM 039f289f9f21\"},{\"created\":\"2026-01-10T17:01:34.21200919Z\",\"created_by\":\"/bin/sh -c chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses  \\u0026\\u0026 chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses\",\"comment\":\"FROM fc3c276b7528\"},{\"created\":\"2026-01-10T17:01:35.156536303Z\",\"created_by\":\"/bin/sh -c #(nop) USER 1001\",\"comment\":\"FROM 43ba09727d39\",\"empty_layer\":true},{\"created\":\"2026-01-10T17:01:35.351752511Z\",\"created_by\":\"/bin/sh -c #(nop) ENV ANSIBLE_USER_ID=1001\",\"comment\":\"FROM 182803b32100\",\"empty_layer\":true}]}",
+    "repositories": [
+        {
+            "published": false,
+            "push_date": "2026-01-10T17:02:43Z",
+            "registry": "quay.io",
+            "repository": "philip860/webserver-operator",
+            "tags": [
+                {
+                    "added_date": "2026-01-10T17:02:43Z",
+                    "name": "v1.0.30"
+                }
+            ]
+        }
+    ],
+    "sum_layer_size_bytes": 555689472,
+    "uncompressed_top_layer_id": "sha256:86426b9e591db2cdd8eba8085aa38b705422152b49960696308d988f33f3d741"
+}

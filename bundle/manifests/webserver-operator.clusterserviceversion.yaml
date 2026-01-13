@@ -4,27 +4,72 @@ metadata:
   name: webserver-operator.v1.0.0
   namespace: placeholder
   annotations:
-    categories: "Application Runtime,WebServer"
+    # Must be standard categories only; remove "WebServer"
+    categories: "Application Runtime"
+
     capabilities: "Basic Install"
     description: "An Ansible-based operator that deploys NGINX or Apache based on a WebServer CR."
-    containerImage: "quay.io/philip860/webserver-operator:latest"
+
+    # Pin the operator image (digest required for certification / preflight checks)
+    # Replace REPLACE_WITH_OPERATOR_IMAGE_DIGEST with the real sha256 digest.
+    containerImage: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
+
+    # Required feature flags (must be present and set to "true" or "false")
+    features.operators.openshift.io/disconnected: "false"
+    features.operators.openshift.io/fips-compliant: "false"
+    features.operators.openshift.io/token-auth-aws: "false"
+    features.operators.openshift.io/token-auth-azure: "false"
+    features.operators.openshift.io/token-auth-gcp: "false"
+    features.operators.openshift.io/proxy-aware: "false"
+    features.operators.openshift.io/tls-profiles: "false"
+
+    # Removes: "example annotations not found" warning
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "example.com/v1alpha1",
+          "kind": "WebServer",
+          "metadata": {
+            "name": "example-webserver"
+          },
+          "spec": {
+            "type": "nginx",
+            "replicas": 1,
+            "port": 8080
+          }
+        }
+      ]
+
 spec:
   displayName: "WebServer Operator"
   description: |
     The WebServer Operator manages WebServer custom resources which can
     deploy either NGINX or Apache HTTPD behind a Service and OpenShift Route.
+
   maturity: alpha
   version: 1.0.0
+
+  # Recommended to avoid "minKubeVersion is not informed"
+  minKubeVersion: "1.30.0"
+
   provider:
     name: Philip
+
   icon:
     - base64data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAAAAgAB4iG8MwAAAABJRU5ErkJggg==
       mediatype: image/png
+
   keywords:
     - nginx
     - apache
     - webserver
     - ansible
+
+  # Ensure all image refs are explicitly listed and pinned
+  relatedImages:
+    - name: webserver-operator
+      image: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
+
   install:
     strategy: deployment
     spec:
@@ -43,8 +88,8 @@ spec:
                 serviceAccountName: webserver-operator
                 containers:
                   - name: ansible-operator
-                    image: quay.io/philip860/webserver-operator:latest
-                    imagePullPolicy: Always
+                    image: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
+                    imagePullPolicy: IfNotPresent
                     env:
                       - name: WATCH_NAMESPACE
                         valueFrom:
@@ -56,6 +101,7 @@ spec:
                             fieldPath: metadata.name
                       - name: OPERATOR_NAME
                         value: "webserver-operator"
+
   customresourcedefinitions:
     owned:
       - name: webservers.example.com
@@ -63,6 +109,7 @@ spec:
         kind: WebServer
         displayName: "WebServer"
         description: "Custom resource that declares an Apache or NGINX deployment."
+
   installModes:
     - type: OwnNamespace
       supported: true
