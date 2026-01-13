@@ -1,37 +1,25 @@
 apiVersion: operators.coreos.com/v1alpha1
 kind: ClusterServiceVersion
 metadata:
-  name: webserver-operator.v1.0.0
+  name: webserver-operator.v1.0.30
   namespace: placeholder
   annotations:
-    # Must be standard categories only; remove "WebServer"
+    # FIX: must be a standard category; remove "WebServer"
     categories: "Application Runtime"
 
     capabilities: "Basic Install"
     description: "An Ansible-based operator that deploys NGINX or Apache based on a WebServer CR."
 
-    # Pin the operator image (digest required for certification / preflight checks)
-    # Replace REPLACE_WITH_OPERATOR_IMAGE_DIGEST with the real sha256 digest.
-    containerImage: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
+    # FIX: pin the operator image
+    containerImage: "quay.io/philip860/webserver-operator@sha256:3a8be40478a671eaf7f5f62d4e4bebfc8a8071a3294203d9e391bddb367ae727"
 
-    # Required feature flags (must be present and set to "true" or "false")
-    features.operators.openshift.io/disconnected: "false"
-    features.operators.openshift.io/fips-compliant: "false"
-    features.operators.openshift.io/token-auth-aws: "false"
-    features.operators.openshift.io/token-auth-azure: "false"
-    features.operators.openshift.io/token-auth-gcp: "false"
-    features.operators.openshift.io/proxy-aware: "false"
-    features.operators.openshift.io/tls-profiles: "false"
-
-    # Removes: "example annotations not found" warning
+    # FIX: add examples (removes warning)
     alm-examples: |-
       [
         {
           "apiVersion": "example.com/v1alpha1",
           "kind": "WebServer",
-          "metadata": {
-            "name": "example-webserver"
-          },
+          "metadata": { "name": "example-webserver" },
           "spec": {
             "type": "nginx",
             "replicas": 1,
@@ -40,20 +28,29 @@ metadata:
         }
       ]
 
+    # FIX: required feature annotations (must exist and be "true"/"false")
+    features.operators.openshift.io/disconnected: "false"
+    features.operators.openshift.io/fips-compliant: "false"
+    features.operators.openshift.io/proxy-aware: "false"
+    features.operators.openshift.io/tls-profiles: "false"
+    features.operators.openshift.io/token-auth-aws: "false"
+    features.operators.openshift.io/token-auth-azure: "false"
+    features.operators.openshift.io/token-auth-gcp: "false"
+
 spec:
   displayName: "WebServer Operator"
   description: |
     The WebServer Operator manages WebServer custom resources which can
     deploy either NGINX or Apache HTTPD behind a Service and OpenShift Route.
-
   maturity: alpha
-  version: 1.0.0
+  version: 1.0.30
 
-  # Recommended to avoid "minKubeVersion is not informed"
-  minKubeVersion: "1.30.0"
+  # FIX: set a real minimum kube version (use your cluster's kube version as baseline)
+  # Get it via: oc version -o json | jq -r '.openshiftVersion, .serverVersion.gitVersion'
+  minKubeVersion: "1.33.6"  # <-- REPLACE with real value (example: v1.30.0 or v1.31.0)
 
   provider:
-    name: Philip
+    name: Duncan-Networks
 
   icon:
     - base64data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAAAAgAB4iG8MwAAAABJRU5ErkJggg==
@@ -65,10 +62,10 @@ spec:
     - webserver
     - ansible
 
-  # Ensure all image refs are explicitly listed and pinned
+  # FIX: pinned image refs + required for future enforcement
   relatedImages:
     - name: webserver-operator
-      image: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
+      image: "quay.io/philip860/webserver-operator@sha256:3a8be40478a671eaf7f5f62d4e4bebfc8a8071a3294203d9e391bddb367ae727"
 
   install:
     strategy: deployment
@@ -88,7 +85,8 @@ spec:
                 serviceAccountName: webserver-operator
                 containers:
                   - name: ansible-operator
-                    image: "quay.io/philip860/webserver-operator@sha256:f98cfa03170759100fd5e8761887a5514fc26e86d780bae69ac4af3a11ff1e78"
+                    # FIX: must match pinned digest
+                    image: "quay.io/philip860/webserver-operator@sha256:3a8be40478a671eaf7f5f62d4e4bebfc8a8071a3294203d9e391bddb367ae727"
                     imagePullPolicy: IfNotPresent
                     env:
                       - name: WATCH_NAMESPACE
