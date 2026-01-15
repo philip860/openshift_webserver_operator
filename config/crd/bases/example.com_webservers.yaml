@@ -1,3 +1,4 @@
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -19,20 +20,26 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          required:
+            - spec
           properties:
             spec:
               type: object
+              required:
+                - type
               properties:
                 type:
                   type: string
                   enum:
                     - nginx
-                    - httpd
+                    - apache
+                  default: nginx
                   title: "Web Server Type"
-                  description: "Select which web server to deploy (nginx or httpd)."
+                  description: "Select which web server to deploy."
                   x-descriptors:
                     - "urn:alm:descriptor:com.tectonic.ui:select:nginx"
-                    - "urn:alm:descriptor:com.tectonic.ui:select:httpd"
+                    - "urn:alm:descriptor:com.tectonic.ui:select:apache"
+
                 replicas:
                   type: integer
                   format: int32
@@ -42,26 +49,26 @@ spec:
                   description: "Number of pod replicas."
                   x-descriptors:
                     - "urn:alm:descriptor:com.tectonic.ui:number"
+
                 port:
                   type: integer
                   format: int32
-                  default: 80
+                  minimum: 1
+                  maximum: 65535
+                  default: 8080
                   title: "Container Port"
-                  description: "Port the web server listens on inside the container (nginx/httpd default is 80)."
+                  description: "Port on which the web server listens."
                   x-descriptors:
-                    - "urn:alm:descriptor:com.tectonic.ui:text"
+                    - "urn:alm:descriptor:com.tectonic.ui:number"
+
                 image:
                   type: string
+                  default: ""
                   title: "Custom Image"
-                  description: >-
-                    Optional override container image. If left empty, a default
-                    image will be used:
-                    nginx -> docker.io/library/nginx:1.27-alpine,
-                    httpd -> docker.io/library/httpd:2.4-alpine.
+                  description: "Optional override container image."
                   x-descriptors:
                     - "urn:alm:descriptor:com.tectonic.ui:text"
-              required:
-                - type
+
             status:
               type: object
               properties:
