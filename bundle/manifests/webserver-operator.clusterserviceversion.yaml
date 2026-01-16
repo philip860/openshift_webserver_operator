@@ -14,7 +14,7 @@ metadata:
     operators.operatorframework.io.bundle.channel.default.v1: stable
 
     # Operator image (pinned)
-    containerImage: quay.io/philip860/webserver-operator@sha256:cff4fc009b89baf7449de14a27b9080d0b6a85cd76858a41048c229149ddec6b
+    containerImage: quay.io/philip860/webserver-operator:1.0.34-dev
 
     # Console sample CR
     alm-examples: >-
@@ -2895,7 +2895,7 @@ spec:
     - ansible
   relatedImages:
     - name: webserver-operator
-      image: quay.io/philip860/webserver-operator@sha256:cff4fc009b89baf7449de14a27b9080d0b6a85cd76858a41048c229149ddec6b
+      image: quay.io/philip860/webserver-operator:1.0.34-dev
   install:
     strategy: deployment
     spec:
@@ -2914,7 +2914,7 @@ spec:
                 serviceAccountName: webserver-operator
                 containers:
                   - name: ansible-operator
-                    image: quay.io/philip860/webserver-operator@sha256:cff4fc009b89baf7449de14a27b9080d0b6a85cd76858a41048c229149ddec6b
+                    image: quay.io/philip860/webserver-operator:1.0.34-dev
                     imagePullPolicy: IfNotPresent
                     env:
                       - name: WATCH_NAMESPACE
