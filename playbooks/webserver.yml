@@ -7,45 +7,7 @@
     webserver_name: "{{ ansible_operator_meta.name }}"
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
-    #################################################################
-    # FIX: In your runtime, top-level `spec` is {}.
-    # Prefer ansible-operator injected vars (ansible_operator_spec),
-    # then fall back to full CR object, then last-resort `spec`.
-    #################################################################
-
-    # Full CR object (may or may not exist depending on scaffold/version)
-    cr_obj: >-
-      {{
-        ansible_operator_resource
-        | default(resource, true)
-        | default(meta, true)
-        | default({}, true)
-      }}
-
-    # SPEC extraction priority:
-    # 1) ansible_operator_spec (most common ansible-operator injection)
-    # 2) cr_obj.spec (if full CR object exists)
-    # 3) top-level spec (last resort)
-    spec_obj: >-
-      {{
-        ansible_operator_spec
-        | default(
-            (cr_obj.get('spec', {}) if (cr_obj is mapping) else {}),
-            true
-          )
-        | default(spec, true)
-        | default({}, true)
-      }}
-
-    # Normalize type for robust comparison
-    server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
-    server_type:     "{{ server_type_raw | string | lower | trim }}"
-
-    # Raw values from the CR spec
-    replicas:       "{{ spec_obj.get('replicas', 1) }}"
-    container_port: "{{ spec_obj.get('port', 8080) }}"
-
-    # Default images
+    # Default images (OpenShift-friendly)
     nginx_image_default:  "nginxinc/nginx-unprivileged:stable-alpine"
     apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
 
@@ -76,28 +38,46 @@
     #################################################################
     - block:
         #################################################################
-        # DEBUG: prove exactly what we received and which var is populated
+        # Read the WebServer CR directly from the API (authoritative)
+        # This bypasses ansible-operator variable injection issues.
         #################################################################
-        - name: Debug what the operator received from the CR
+        - name: Read the WebServer CR from the API (authoritative)
+          k8s_info:
+            api_version: example.com/v1alpha1
+            kind: WebServer
+            namespace: "{{ webserver_ns }}"
+            name: "{{ webserver_name }}"
+          register: ws_cr
+
+        - name: Fail if CR could not be read
+          fail:
+            msg: >-
+              Unable to read WebServer {{ webserver_name }} in namespace {{ webserver_ns }}.
+              ws_cr.resources={{ ws_cr.resources | default([]) }}
+          when: (ws_cr.resources | default([]) | length) == 0
+
+        - name: Extract spec from CR (authoritative)
+          set_fact:
+            spec_obj: "{{ ws_cr.resources[0].spec | default({}) }}"
+
+        - name: Normalize server type + other spec values
+          set_fact:
+            server_type_raw: "{{ spec_obj.type | default('nginx') }}"
+            server_type: "{{ (spec_obj.type | default('nginx')) | string | lower | trim }}"
+            replicas: "{{ spec_obj.replicas | default(1) }}"
+            container_port: "{{ spec_obj.port | default(8080) }}"
+
+        - name: DEBUG - what the operator received (API read)
           debug:
             msg:
               - "CR name/namespace: {{ webserver_name }}/{{ webserver_ns }}"
-              - "ansible_operator_spec defined: {{ ansible_operator_spec is defined }}"
-              - "ansible_operator_spec: {{ ansible_operator_spec | default('<undefined>') }}"
-              - "has ansible_operator_resource={{ ansible_operator_resource is defined }}"
-              - "has resource={{ resource is defined }}"
-              - "has meta={{ meta is defined }}"
-              - "top-level spec var={{ spec | default('<undefined>') }}"
-              - "cr_obj type={{ cr_obj | type_debug }}"
-              - "cr_obj keys={{ (cr_obj.keys() | list) if (cr_obj is mapping) else '<not a mapping>' }}"
-              - "Full spec_obj (extracted): {{ spec_obj }}"
-              - "CR spec.type raw: {{ server_type_raw }}"
-              - "Normalized server_type: {{ server_type }}"
+              - "Full spec (API): {{ spec_obj }}"
+              - "spec.type raw: {{ server_type_raw }}"
+              - "server_type normalized: {{ server_type }}"
+              - "replicas: {{ replicas | int }}"
+              - "container_port: {{ container_port | int }}"
 
-        #################################################################
-        # Validate server_type is supported (do not silently fall back)
-        #################################################################
-        - name: Validate server_type is supported
+        - name: Validate server_type is supported (do not silently fall back)
           fail:
             msg: >-
               Unsupported spec.type='{{ server_type_raw }}' (normalized='{{ server_type }}').
@@ -107,51 +87,22 @@
         #################################################################
         # Compute desired container image/name
         #################################################################
-        - name: Determine default image for server type
+        - name: Determine default image + container name for server type
           set_fact:
-            default_image: "{{ apache_image_default if server_type in ['apache', 'httpd'] else nginx_image_default }}"
+            default_image: "{{ apache_image_default if server_type in ['apache','httpd'] else nginx_image_default }}"
+            container_name: "{{ 'apache' if server_type in ['apache','httpd'] else 'nginx' }}"
 
         - name: Pick final container image (allow explicit override via spec.image)
           set_fact:
             container_image: >-
-              {{ (
-                  spec_obj.get('image', '')
-                  if (spec_obj.get('image', '') | string | trim | length > 0)
-                  else default_image
-                ) | trim }}
-
-        - name: Set container name
-          set_fact:
-            container_name: "{{ 'apache' if server_type in ['apache', 'httpd'] else 'nginx' }}"
+              {{ (spec_obj.image | default('') | string | trim | length > 0)
+                 | ternary(spec_obj.image | string | trim, default_image) }}
 
         - name: DEBUG - computed desired container values
           debug:
             msg:
               - "desired container_name={{ container_name }}"
               - "desired container_image={{ container_image }}"
-              - "desired replicas={{ replicas | int }}"
-              - "desired container_port={{ container_port | int }}"
-
-        #################################################################
-        # DEBUG: read current Deployment (if it exists) so we can compare
-        #################################################################
-        - name: Get existing Deployment (if any)
-          k8s_info:
-            api_version: apps/v1
-            kind: Deployment
-            namespace: "{{ webserver_ns }}"
-            name: "{{ webserver_name }}"
-          register: existing_deploy
-          failed_when: false
-
-        - name: DEBUG - existing Deployment container (if present)
-          debug:
-            msg: >-
-              existing container={{ (existing_deploy.resources[0].spec.template.spec.containers[0].name
-                if (existing_deploy.resources | default([]) | length) > 0 else '<none>') }},
-              image={{ (existing_deploy.resources[0].spec.template.spec.containers[0].image
-                if (existing_deploy.resources | default([]) | length) > 0 else '<none>') }}
-          when: existing_deploy is defined
 
         #################################################################
         # Build Deployment via YAML + from_yaml (ensures ints, not strings)
@@ -197,9 +148,6 @@
           set_fact:
             deployment_definition: "{{ deployment_manifest_yaml | from_yaml }}"
 
-        #################################################################
-        # Apply Deployment (force helps ensure spec updates are pushed)
-        #################################################################
         - name: Ensure Deployment exists for selected web server (force apply)
           k8s:
             state: present
@@ -207,35 +155,7 @@
             force: true
 
         #################################################################
-        # Re-read Deployment after apply and verify it matches desired state
-        #################################################################
-        - name: Get Deployment after apply
-          k8s_info:
-            api_version: apps/v1
-            kind: Deployment
-            namespace: "{{ webserver_ns }}"
-            name: "{{ webserver_name }}"
-          register: applied_deploy
-
-        - name: DEBUG - applied Deployment container
-          debug:
-            msg:
-              - "applied container_name={{ applied_deploy.resources[0].spec.template.spec.containers[0].name }}"
-              - "applied container_image={{ applied_deploy.resources[0].spec.template.spec.containers[0].image }}"
-
-        - name: FAIL if applied Deployment does not match desired server type
-          fail:
-            msg: >-
-              Reconcile mismatch: spec.type='{{ server_type }}' requested, but Deployment is still
-              container='{{ applied_deploy.resources[0].spec.template.spec.containers[0].name }}'
-              image='{{ applied_deploy.resources[0].spec.template.spec.containers[0].image }}'
-          when: >
-            (server_type in ['apache','httpd'] and applied_deploy.resources[0].spec.template.spec.containers[0].name != 'apache')
-            or
-            (server_type == 'nginx' and applied_deploy.resources[0].spec.template.spec.containers[0].name != 'nginx')
-
-        #################################################################
-        # Service
+        # Ensure Service exists
         #################################################################
         - name: Ensure Service exists
           k8s:
@@ -257,7 +177,7 @@
                     protocol: TCP
 
         #################################################################
-        # Route
+        # Ensure Route exists
         #################################################################
         - name: Ensure Route exists
           k8s:
@@ -279,7 +199,7 @@
                   termination: edge
 
         #################################################################
-        # Status
+        # Update status
         #################################################################
         - name: Set status to Ready
           operator_sdk.util.k8s_status:
