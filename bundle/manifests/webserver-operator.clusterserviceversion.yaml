@@ -1,7 +1,7 @@
 apiVersion: operators.coreos.com/v1alpha1
 kind: ClusterServiceVersion
 metadata:
-  name: webserver-operator.v1.0.33
+  name: webserver-operator.v1.0.34
   namespace: placeholder
   annotations:
     categories: Application Runtime
@@ -45,9 +45,9 @@ metadata:
     operators.operatorframework.io.bundle.manifests.v1: manifests/
     operators.operatorframework.io.bundle.metadata.v1: metadata/
 
-    # Allow clusters on older 1.0.x releases to upgrade directly to 1.0.33
+    # Allow clusters on older 1.0.x releases to upgrade directly to 1.0.34
     # even if intermediate versions are missing from some catalog/index builds.
-    olm.skipRange: ">=1.0.0 <1.0.33"
+    olm.skipRange: ">=1.0.0 <1.0.34"
 
 spec:
   displayName: WebServer Operator
@@ -55,10 +55,10 @@ spec:
     The WebServer Operator manages WebServer custom resources which can
     deploy either NGINX or Apache HTTPD behind a Service and OpenShift Route.
   maturity: stable
-  version: 1.0.33
+  version: 1.0.34
 
   # Replace the last known-good public stable version in the catalog
-  replaces: webserver-operator.v1.0.30
+  replaces: webserver-operator.v1.0.33
 
   provider:
     name: Duncan-Networks
