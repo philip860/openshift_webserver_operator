@@ -7,12 +7,14 @@
     webserver_name: "{{ ansible_operator_meta.name }}"
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
-    # Normalize type for robust comparison (handles whitespace/casing)
-    server_type: "{{ (spec.type | default('nginx')) | lower | trim }}"
+    # Robust extraction of spec + type (avoid attribute-access pitfalls)
+    spec_obj:        "{{ spec | default({}) }}"
+    server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
+    server_type:     "{{ server_type_raw | string | lower | trim }}"
 
     # Raw values from the CR spec (cast later when we build the manifest)
-    replicas:       "{{ spec.replicas | default(1) }}"
-    container_port: "{{ spec.port | default(8080) }}"
+    replicas:       "{{ spec_obj.get('replicas', 1) }}"
+    container_port: "{{ spec_obj.get('port', 8080) }}"
 
     # Default images (OpenShift-friendly)
     # - nginx: nginxinc/nginx-unprivileged listens on 8080 and runs as non-root
@@ -47,28 +49,42 @@
     # CREATE / UPDATE PATH
     #################################################################
     - block:
+        #################################################################
+        # Debug + validation so we never silently deploy nginx when apache
+        # was requested (or when the spec is malformed)
+        #################################################################
+        - name: Debug what the operator received from the CR
+          debug:
+            msg:
+              - "CR name/namespace: {{ webserver_name }}/{{ webserver_ns }}"
+              - "CR spec.type raw: {{ server_type_raw }}"
+              - "Normalized server_type: {{ server_type }}"
+              - "Full spec: {{ spec_obj }}"
+
+        - name: Validate server_type is supported (do not silently fall back)
+          fail:
+            msg: >-
+              Unsupported spec.type='{{ server_type_raw }}'
+              (normalized='{{ server_type }}').
+              Must be one of: nginx, apache
+          when: server_type not in ['nginx', 'apache', 'httpd']
+
         - name: Determine default image for server type
           set_fact:
-            default_image: >-
-              {% if server_type in ['apache', 'httpd'] %}
-              {{ apache_image_default }}
-              {% else %}
-              {{ nginx_image_default }}
-              {% endif %}
+            default_image: "{{ apache_image_default if server_type in ['apache', 'httpd'] else nginx_image_default }}"
 
         - name: Pick final container image (allow explicit override via spec.image)
           set_fact:
             container_image: >-
               {{ (
-                  spec.image
-                  if (spec is defined and spec.image is defined and (spec.image | string | trim | length > 0))
+                  spec_obj.get('image', '')
+                  if (spec_obj.get('image', '') | string | trim | length > 0)
                   else default_image
                 ) | trim }}
 
-        - name: Set container name (avoid unexpected names if type is weird)
+        - name: Set container name
           set_fact:
-            container_name: >-
-              {{ 'apache' if server_type in ['apache', 'httpd'] else 'nginx' }}
+            container_name: "{{ 'apache' if server_type in ['apache', 'httpd'] else 'nginx' }}"
 
         #################################################################
         # Build Deployment via YAML + from_yaml (ensures ints, not strings)
@@ -168,4 +184,5 @@
               message: >-
                 Deployed {{ container_name }} using image {{ container_image }}
                 with {{ replicas | int }} replica(s) on port {{ container_port | int }}
+
       when: not being_deleted
