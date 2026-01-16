@@ -2915,7 +2915,7 @@ spec:
                 containers:
                   - name: ansible-operator
                     image: quay.io/philip860/webserver-operator:v1.0.34-dev
-                    imagePullPolicy: IfNotPresent
+                    imagePullPolicy: Always
                     env:
                       - name: WATCH_NAMESPACE
                         valueFrom:
