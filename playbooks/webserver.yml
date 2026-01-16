@@ -17,15 +17,12 @@
     container_port: "{{ spec_obj.get('port', 8080) }}"
 
     # Default images (OpenShift-friendly)
-    # - nginx: nginxinc/nginx-unprivileged listens on 8080 and runs as non-root
-    # - apache/httpd: RHEL/UBI httpd-24 appstream container
     nginx_image_default:  "nginxinc/nginx-unprivileged:stable-alpine"
     apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
 
   tasks:
     #################################################################
-    # Detect delete vs normal reconcile (GC handles child deletion
-    # via ownerReferences when set on created objects)
+    # Detect delete vs normal reconcile
     #################################################################
     - name: Detect if WebServer CR is being deleted
       set_fact:
@@ -34,7 +31,7 @@
              and (ansible_operator_meta.deletion_timestamp | string | length) > 0 }}
 
     #################################################################
-    # Common labels (for create/update path)
+    # Labels (create/update only)
     #################################################################
     - name: Set labels (create/update only)
       set_fact:
@@ -50,25 +47,29 @@
     #################################################################
     - block:
         #################################################################
-        # Debug + validation so we never silently deploy nginx when apache
-        # was requested (or when the spec is malformed)
+        # DEBUG: show exactly what spec the operator received
         #################################################################
-        - name: Debug what the operator received from the CR
+        - name: DEBUG - CR identity + raw spec
           debug:
             msg:
-              - "CR name/namespace: {{ webserver_name }}/{{ webserver_ns }}"
-              - "CR spec.type raw: {{ server_type_raw }}"
-              - "Normalized server_type: {{ server_type }}"
-              - "Full spec: {{ spec_obj }}"
+              - "CR: {{ webserver_name }} (ns={{ webserver_ns }})"
+              - "spec.type raw: {{ server_type_raw }}"
+              - "server_type normalized: {{ server_type }}"
+              - "spec (full): {{ spec_obj }}"
 
-        - name: Validate server_type is supported (do not silently fall back)
+        #################################################################
+        # Validate server_type is supported (do not silently fall back)
+        #################################################################
+        - name: Validate server_type is supported
           fail:
             msg: >-
-              Unsupported spec.type='{{ server_type_raw }}'
-              (normalized='{{ server_type }}').
+              Unsupported spec.type='{{ server_type_raw }}' (normalized='{{ server_type }}').
               Must be one of: nginx, apache
           when: server_type not in ['nginx', 'apache', 'httpd']
 
+        #################################################################
+        # Compute desired container image/name
+        #################################################################
         - name: Determine default image for server type
           set_fact:
             default_image: "{{ apache_image_default if server_type in ['apache', 'httpd'] else nginx_image_default }}"
@@ -85,6 +86,35 @@
         - name: Set container name
           set_fact:
             container_name: "{{ 'apache' if server_type in ['apache', 'httpd'] else 'nginx' }}"
+
+        - name: DEBUG - computed desired container values
+          debug:
+            msg:
+              - "desired container_name={{ container_name }}"
+              - "desired container_image={{ container_image }}"
+              - "desired replicas={{ replicas | int }}"
+              - "desired container_port={{ container_port | int }}"
+
+        #################################################################
+        # DEBUG: read current Deployment (if it exists) so we can compare
+        #################################################################
+        - name: Get existing Deployment (if any)
+          k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            namespace: "{{ webserver_ns }}"
+            name: "{{ webserver_name }}"
+          register: existing_deploy
+          failed_when: false
+
+        - name: DEBUG - existing Deployment container (if present)
+          debug:
+            msg: >-
+              existing container={{ (existing_deploy.resources[0].spec.template.spec.containers[0].name
+                if (existing_deploy.resources | default([]) | length) > 0 else '<none>') }},
+              image={{ (existing_deploy.resources[0].spec.template.spec.containers[0].image
+                if (existing_deploy.resources | default([]) | length) > 0 else '<none>') }}
+          when: existing_deploy is defined
 
         #################################################################
         # Build Deployment via YAML + from_yaml (ensures ints, not strings)
@@ -130,11 +160,46 @@
           set_fact:
             deployment_definition: "{{ deployment_manifest_yaml | from_yaml }}"
 
-        - name: Ensure Deployment exists for selected web server
+        #################################################################
+        # Apply Deployment (force helps ensure spec updates are pushed)
+        #################################################################
+        - name: Ensure Deployment exists for selected web server (force apply)
           k8s:
             state: present
             definition: "{{ deployment_definition }}"
+            force: true
 
+        #################################################################
+        # Re-read Deployment after apply and verify it matches desired state
+        #################################################################
+        - name: Get Deployment after apply
+          k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            namespace: "{{ webserver_ns }}"
+            name: "{{ webserver_name }}"
+          register: applied_deploy
+
+        - name: DEBUG - applied Deployment container
+          debug:
+            msg:
+              - "applied container_name={{ applied_deploy.resources[0].spec.template.spec.containers[0].name }}"
+              - "applied container_image={{ applied_deploy.resources[0].spec.template.spec.containers[0].image }}"
+
+        - name: FAIL if applied Deployment does not match desired server type
+          fail:
+            msg: >-
+              Reconcile mismatch: spec.type='{{ server_type }}' requested, but Deployment is still
+              container='{{ applied_deploy.resources[0].spec.template.spec.containers[0].name }}'
+              image='{{ applied_deploy.resources[0].spec.template.spec.containers[0].image }}'
+          when: >
+            (server_type in ['apache','httpd'] and applied_deploy.resources[0].spec.template.spec.containers[0].name != 'apache')
+            or
+            (server_type == 'nginx' and applied_deploy.resources[0].spec.template.spec.containers[0].name != 'nginx')
+
+        #################################################################
+        # Service
+        #################################################################
         - name: Ensure Service exists
           k8s:
             state: present
@@ -154,6 +219,9 @@
                     targetPort: http
                     protocol: TCP
 
+        #################################################################
+        # Route
+        #################################################################
         - name: Ensure Route exists
           k8s:
             state: present
@@ -173,6 +241,9 @@
                 tls:
                   termination: edge
 
+        #################################################################
+        # Status
+        #################################################################
         - name: Set status to Ready
           operator_sdk.util.k8s_status:
             api_version: example.com/v1alpha1
