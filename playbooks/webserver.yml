@@ -8,12 +8,12 @@
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
     #################################################################
-    # FIX: In your runtime, the top-level `spec` variable is {}.
-    # So we derive spec from the full CR object when available.
+    # FIX: In your runtime, top-level `spec` is {}.
+    # Prefer ansible-operator injected vars (ansible_operator_spec),
+    # then fall back to full CR object, then last-resort `spec`.
     #################################################################
 
-    # The full CR object is exposed under different variable names
-    # depending on scaffold/version. Try a safe fallback chain.
+    # Full CR object (may or may not exist depending on scaffold/version)
     cr_obj: >-
       {{
         ansible_operator_resource
@@ -22,23 +22,30 @@
         | default({}, true)
       }}
 
-    # Extract spec from the CR object; fall back to the old `spec` var if present
+    # SPEC extraction priority:
+    # 1) ansible_operator_spec (most common ansible-operator injection)
+    # 2) cr_obj.spec (if full CR object exists)
+    # 3) top-level spec (last resort)
     spec_obj: >-
       {{
-        (cr_obj.get('spec', {})
-          if (cr_obj is mapping and (cr_obj.get('spec', None) is not none))
-          else (spec | default({})))
+        ansible_operator_spec
+        | default(
+            (cr_obj.get('spec', {}) if (cr_obj is mapping) else {}),
+            true
+          )
+        | default(spec, true)
+        | default({}, true)
       }}
 
-    # Normalize type for robust comparison (handles whitespace/casing)
+    # Normalize type for robust comparison
     server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
     server_type:     "{{ server_type_raw | string | lower | trim }}"
 
-    # Raw values from the CR spec (cast later when we build the manifest)
+    # Raw values from the CR spec
     replicas:       "{{ spec_obj.get('replicas', 1) }}"
     container_port: "{{ spec_obj.get('port', 8080) }}"
 
-    # Default images (OpenShift-friendly)
+    # Default images
     nginx_image_default:  "nginxinc/nginx-unprivileged:stable-alpine"
     apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
 
@@ -69,21 +76,23 @@
     #################################################################
     - block:
         #################################################################
-        # DEBUG: prove what variables exist + what spec we extracted
+        # DEBUG: prove exactly what we received and which var is populated
         #################################################################
-        - name: DEBUG - which CR vars exist + spec extracted
+        - name: Debug what the operator received from the CR
           debug:
             msg:
-              - "CR: {{ webserver_name }} (ns={{ webserver_ns }})"
+              - "CR name/namespace: {{ webserver_name }}/{{ webserver_ns }}"
+              - "ansible_operator_spec defined: {{ ansible_operator_spec is defined }}"
+              - "ansible_operator_spec: {{ ansible_operator_spec | default('<undefined>') }}"
               - "has ansible_operator_resource={{ ansible_operator_resource is defined }}"
               - "has resource={{ resource is defined }}"
               - "has meta={{ meta is defined }}"
               - "top-level spec var={{ spec | default('<undefined>') }}"
               - "cr_obj type={{ cr_obj | type_debug }}"
               - "cr_obj keys={{ (cr_obj.keys() | list) if (cr_obj is mapping) else '<not a mapping>' }}"
-              - "spec_obj (full)={{ spec_obj }}"
-              - "spec.type raw={{ server_type_raw }}"
-              - "server_type normalized={{ server_type }}"
+              - "Full spec_obj (extracted): {{ spec_obj }}"
+              - "CR spec.type raw: {{ server_type_raw }}"
+              - "Normalized server_type: {{ server_type }}"
 
         #################################################################
         # Validate server_type is supported (do not silently fall back)
