@@ -14,7 +14,7 @@ metadata:
     operators.operatorframework.io.bundle.channel.default.v1: stable
 
     # Operator image (pinned)
-    containerImage: quay.io/philip860/webserver-operator@sha256:3a8be40478a671eaf7f5f62d4e4bebfc8a8071a3294203d9e391bddb367ae727
+    containerImage: quay.io/philip860/webserver-operator@sha256:d57f5952d9918961bfdeab1b657ef5297f6b813befcdd24ea18b8ca3b3adb80c
 
     # Console sample CR
     alm-examples: >-
