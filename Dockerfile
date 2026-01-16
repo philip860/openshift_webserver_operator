@@ -35,7 +35,7 @@ RUN set -eux; \
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
-      version="1.0.31" \
+      version="1.0.34" \
       release="1" \
       summary="Kubernetes operator to deploy and manage web workloads" \
       description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
