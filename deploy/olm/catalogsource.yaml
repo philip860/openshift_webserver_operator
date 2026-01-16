@@ -5,6 +5,6 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: quay.io/philip860/webserver-operator-bundle:v1.0.0
+  image: quay.io/philip860/webserver-operator-bundle:1.0.34-dev
   displayName: WebServer Operator Catalog
   publisher: Philip Duncan (Duncan-Networks)
