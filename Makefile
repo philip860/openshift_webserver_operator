@@ -1,7 +1,7 @@
 # Simplified Makefile for building operator image and bundle
-IMG ?= quay.io/philip860/webserver-operator:latest
-BUNDLE_IMG ?= quay.io/philip860/webserver-operator-bundle:v1.0.0
-VERSION ?= 1.0.0
+IMG ?= quay.io/philip860/webserver-operator:v1.0.34-dev
+BUNDLE_IMG ?= quay.io/philip860/webserver-operator-bundle:v1.0.34-dev
+VERSION ?= v1.0.34-dev
 
 all: docker-build docker-push
 
