@@ -7,8 +7,30 @@
     webserver_name: "{{ ansible_operator_meta.name }}"
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
-    # Robust extraction of spec + type (avoid attribute-access pitfalls)
-    spec_obj:        "{{ spec | default({}) }}"
+    #################################################################
+    # FIX: In your runtime, the top-level `spec` variable is {}.
+    # So we derive spec from the full CR object when available.
+    #################################################################
+
+    # The full CR object is exposed under different variable names
+    # depending on scaffold/version. Try a safe fallback chain.
+    cr_obj: >-
+      {{
+        ansible_operator_resource
+        | default(resource, true)
+        | default(meta, true)
+        | default({}, true)
+      }}
+
+    # Extract spec from the CR object; fall back to the old `spec` var if present
+    spec_obj: >-
+      {{
+        (cr_obj.get('spec', {})
+          if (cr_obj is mapping and (cr_obj.get('spec', None) is not none))
+          else (spec | default({})))
+      }}
+
+    # Normalize type for robust comparison (handles whitespace/casing)
     server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
     server_type:     "{{ server_type_raw | string | lower | trim }}"
 
@@ -47,15 +69,21 @@
     #################################################################
     - block:
         #################################################################
-        # DEBUG: show exactly what spec the operator received
+        # DEBUG: prove what variables exist + what spec we extracted
         #################################################################
-        - name: DEBUG - CR identity + raw spec
+        - name: DEBUG - which CR vars exist + spec extracted
           debug:
             msg:
               - "CR: {{ webserver_name }} (ns={{ webserver_ns }})"
-              - "spec.type raw: {{ server_type_raw }}"
-              - "server_type normalized: {{ server_type }}"
-              - "spec (full): {{ spec_obj }}"
+              - "has ansible_operator_resource={{ ansible_operator_resource is defined }}"
+              - "has resource={{ resource is defined }}"
+              - "has meta={{ meta is defined }}"
+              - "top-level spec var={{ spec | default('<undefined>') }}"
+              - "cr_obj type={{ cr_obj | type_debug }}"
+              - "cr_obj keys={{ (cr_obj.keys() | list) if (cr_obj is mapping) else '<not a mapping>' }}"
+              - "spec_obj (full)={{ spec_obj }}"
+              - "spec.type raw={{ server_type_raw }}"
+              - "server_type normalized={{ server_type }}"
 
         #################################################################
         # Validate server_type is supported (do not silently fall back)
