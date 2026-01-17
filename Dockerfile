@@ -32,7 +32,7 @@ RUN set -eux; \
     fi
 
 # ---- Required certification labels (edit values to match your project) ----
-LABEL name="webserver-operator" \
+LABEL name="webserver-operator-dev" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
       version="1.0.34" \
