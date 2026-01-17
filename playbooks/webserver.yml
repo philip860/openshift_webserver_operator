@@ -180,6 +180,44 @@
           when: debug_enabled | bool
 
         #################################################################
+        # FIX: Apache index/probe failures
+        # - Provide a minimal webroot (index.html + healthz) for apache/httpd
+        # - Probe /healthz (200) instead of / (which could be 403 if no index)
+        #################################################################
+        - name: Ensure Apache webroot ConfigMap exists (index.html + healthz)
+          k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ webserver_name }}-webroot"
+                namespace: "{{ webserver_ns }}"
+                labels: "{{ labels }}"
+                ownerReferences:
+                  - apiVersion: "{{ cr_api_version }}"
+                    kind: "{{ cr_kind }}"
+                    name: "{{ webserver_name }}"
+                    uid: "{{ cr_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
+              data:
+                index.html: |
+                  <!doctype html>
+                  <html>
+                    <head>
+                      <meta charset="utf-8" />
+                      <title>{{ webserver_name }}</title>
+                    </head>
+                    <body>
+                      <h1>{{ webserver_name }}</h1>
+                      <p>Deployed by webserver-operator.</p>
+                    </body>
+                  </html>
+                healthz: "ok\n"
+          when: server_type in ['apache', 'httpd']
+
+        #################################################################
         # Build Deployment via YAML + from_yaml (ensures ints, not strings)
         #################################################################
         - name: Build Deployment manifest as YAML
@@ -207,21 +245,33 @@
                   metadata:
                     labels: {{ labels | to_json }}
                   spec:
+                    {% if server_type in ['apache','httpd'] %}
+                    volumes:
+                      - name: webroot
+                        configMap:
+                          name: {{ webserver_name }}-webroot
+                    {% endif %}
                     containers:
                       - name: {{ container_name }}
                         image: {{ container_image }}
                         ports:
                           - name: http
                             containerPort: {{ container_port | int }}
+                        {% if server_type in ['apache','httpd'] %}
+                        volumeMounts:
+                          - name: webroot
+                            mountPath: /var/www/html
+                            readOnly: true
+                        {% endif %}
                         readinessProbe:
                           httpGet:
-                            path: /
+                            path: {{ '/healthz' if server_type in ['apache','httpd'] else '/' }}
                             port: http
                           initialDelaySeconds: 5
                           periodSeconds: 10
                         livenessProbe:
                           httpGet:
-                            path: /
+                            path: {{ '/healthz' if server_type in ['apache','httpd'] else '/' }}
                             port: http
                           initialDelaySeconds: 10
                           periodSeconds: 20
@@ -238,6 +288,7 @@
               - "container_image={{ container_image }}"
               - "replicas={{ replicas | int }}"
               - "container_port={{ container_port | int }}"
+              - "probe_path={{ '/healthz' if server_type in ['apache','httpd'] else '/' }}"
           when: debug_enabled | bool
 
         - name: Ensure Deployment exists for selected web server (force apply)
