@@ -11,6 +11,13 @@
     nginx_image_default:  "nginxinc/nginx-unprivileged:stable-alpine"
     apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
 
+    # API flap resilience for reading the CR
+    cr_read_retries: 12
+    cr_read_delay: 5
+
+    # Toggle to reduce noise if needed (set to false later)
+    debug_enabled: true
+
   tasks:
     #################################################################
     # Detect delete vs normal reconcile
@@ -34,54 +41,121 @@
       when: not being_deleted
 
     #################################################################
+    # DELETE PATH (optional)
+    # If you rely on ownerReferences, you can omit this.
+    #################################################################
+    - block:
+        - name: DEBUG - delete path hit
+          debug:
+            msg:
+              - "Delete reconcile for {{ webserver_name }}/{{ webserver_ns }} (deletionTimestamp={{ ansible_operator_meta.deletion_timestamp | default('') }})"
+          when: debug_enabled | bool
+
+        # If you want explicit deletes, uncomment these:
+        # - name: Delete Route
+        #   k8s:
+        #     state: absent
+        #     api_version: route.openshift.io/v1
+        #     kind: Route
+        #     namespace: "{{ webserver_ns }}"
+        #     name: "{{ webserver_name }}"
+        #
+        # - name: Delete Service
+        #   k8s:
+        #     state: absent
+        #     api_version: v1
+        #     kind: Service
+        #     namespace: "{{ webserver_ns }}"
+        #     name: "{{ webserver_name }}"
+        #
+        # - name: Delete Deployment
+        #   k8s:
+        #     state: absent
+        #     api_version: apps/v1
+        #     kind: Deployment
+        #     namespace: "{{ webserver_ns }}"
+        #     name: "{{ webserver_name }}"
+      when: being_deleted
+
+    #################################################################
     # CREATE / UPDATE PATH
     #################################################################
     - block:
         #################################################################
         # Read the WebServer CR directly from the API (authoritative)
-        # This bypasses ansible-operator variable injection issues.
+        # Retry because SNO/API flaps can make k8s_info return empty.
         #################################################################
-        - name: Read the WebServer CR from the API (authoritative)
+        - name: Read the WebServer CR from the API (authoritative, with retries)
           k8s_info:
             api_version: example.com/v1alpha1
             kind: WebServer
             namespace: "{{ webserver_ns }}"
             name: "{{ webserver_name }}"
           register: ws_cr
+          retries: "{{ cr_read_retries }}"
+          delay: "{{ cr_read_delay }}"
+          until: (ws_cr.resources | default([]) | length) > 0
 
-        - name: Fail if CR could not be read
+        - name: Fail if CR could not be read (after retries)
           fail:
             msg: >-
-              Unable to read WebServer {{ webserver_name }} in namespace {{ webserver_ns }}.
+              Unable to read WebServer {{ webserver_name }} in namespace {{ webserver_ns }}
+              after {{ cr_read_retries }} retries (delay={{ cr_read_delay }}s).
               ws_cr.resources={{ ws_cr.resources | default([]) }}
           when: (ws_cr.resources | default([]) | length) == 0
+
+        - name: Capture CR metadata needed for ownerReferences
+          set_fact:
+            cr_uid: "{{ ws_cr.resources[0].metadata.uid }}"
+            cr_api_version: "{{ ws_cr.resources[0].apiVersion }}"
+            cr_kind: "{{ ws_cr.resources[0].kind }}"
+            cr_generation: "{{ ws_cr.resources[0].metadata.generation | default('') }}"
+            cr_resource_version: "{{ ws_cr.resources[0].metadata.resourceVersion | default('') }}"
 
         - name: Extract spec from CR (authoritative)
           set_fact:
             spec_obj: "{{ ws_cr.resources[0].spec | default({}) }}"
 
-        - name: Normalize server type + other spec values
-          set_fact:
-            server_type_raw: "{{ spec_obj.type | default('nginx') }}"
-            server_type: "{{ (spec_obj.type | default('nginx')) | string | lower | trim }}"
-            replicas: "{{ spec_obj.replicas | default(1) }}"
-            container_port: "{{ spec_obj.port | default(8080) }}"
-
-        - name: DEBUG - what the operator received (API read)
+        #################################################################
+        # DEEP DEBUG: dump raw CR + spec shape
+        #################################################################
+        - name: DEBUG - raw CR object summary (authoritative)
           debug:
             msg:
-              - "CR name/namespace: {{ webserver_name }}/{{ webserver_ns }}"
-              - "Full spec (API): {{ spec_obj }}"
-              - "spec.type raw: {{ server_type_raw }}"
-              - "server_type normalized: {{ server_type }}"
-              - "replicas: {{ replicas | int }}"
-              - "container_port: {{ container_port | int }}"
+              - "ws_cr.resources length={{ ws_cr.resources | default([]) | length }}"
+              - "apiVersion={{ ws_cr.resources[0].apiVersion | default('') }}"
+              - "kind={{ ws_cr.resources[0].kind | default('') }}"
+              - "name={{ ws_cr.resources[0].metadata.name | default('') }}"
+              - "namespace={{ ws_cr.resources[0].metadata.namespace | default('') }}"
+              - "uid={{ ws_cr.resources[0].metadata.uid | default('') }}"
+              - "generation={{ cr_generation }}"
+              - "resourceVersion={{ cr_resource_version }}"
+              - "deletionTimestamp={{ ws_cr.resources[0].metadata.deletionTimestamp | default('') }}"
+              - "spec={{ spec_obj }}"
+              - "spec keys={{ (spec_obj.keys() | list) if (spec_obj is mapping) else 'NOT_A_MAPPING' }}"
+          when: debug_enabled | bool
+
+        - name: Normalize server type + other spec values (safe dict access)
+          set_fact:
+            server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
+            server_type: "{{ (spec_obj.get('type', 'nginx')) | string | lower | trim }}"
+            replicas: "{{ spec_obj.get('replicas', 1) }}"
+            container_port: "{{ spec_obj.get('port', 8080) }}"
+
+        - name: DEBUG - normalized values
+          debug:
+            msg:
+              - "spec.type raw={{ server_type_raw }}"
+              - "server_type normalized={{ server_type }}"
+              - "replicas={{ replicas }}"
+              - "container_port={{ container_port }}"
+          when: debug_enabled | bool
 
         - name: Validate server_type is supported (do not silently fall back)
           fail:
             msg: >-
               Unsupported spec.type='{{ server_type_raw }}' (normalized='{{ server_type }}').
-              Must be one of: nginx, apache
+              Must be one of: nginx, apache, httpd
           when: server_type not in ['nginx', 'apache', 'httpd']
 
         #################################################################
@@ -95,14 +169,15 @@
         - name: Pick final container image (allow explicit override via spec.image)
           set_fact:
             container_image: >-
-              {{ (spec_obj.image | default('') | string | trim | length > 0)
-                 | ternary(spec_obj.image | string | trim, default_image) }}
+              {{ (spec_obj.get('image', '') | string | trim | length > 0)
+                 | ternary(spec_obj.get('image', '') | string | trim, default_image) }}
 
         - name: DEBUG - computed desired container values
           debug:
             msg:
               - "desired container_name={{ container_name }}"
               - "desired container_image={{ container_image }}"
+          when: debug_enabled | bool
 
         #################################################################
         # Build Deployment via YAML + from_yaml (ensures ints, not strings)
@@ -116,6 +191,13 @@
                 name: {{ webserver_name }}
                 namespace: {{ webserver_ns }}
                 labels: {{ labels | to_json }}
+                ownerReferences:
+                  - apiVersion: {{ cr_api_version }}
+                    kind: {{ cr_kind }}
+                    name: {{ webserver_name }}
+                    uid: {{ cr_uid }}
+                    controller: true
+                    blockOwnerDeletion: true
               spec:
                 replicas: {{ replicas | int }}
                 selector:
@@ -148,11 +230,41 @@
           set_fact:
             deployment_definition: "{{ deployment_manifest_yaml | from_yaml }}"
 
+        - name: DEBUG - deployment intent
+          debug:
+            msg:
+              - "Applying Deployment={{ webserver_name }} ns={{ webserver_ns }}"
+              - "container_name={{ container_name }}"
+              - "container_image={{ container_image }}"
+              - "replicas={{ replicas | int }}"
+              - "container_port={{ container_port | int }}"
+          when: debug_enabled | bool
+
         - name: Ensure Deployment exists for selected web server (force apply)
           k8s:
             state: present
             definition: "{{ deployment_definition }}"
             force: true
+
+        - name: Read back Deployment after apply (confirm result)
+          k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            namespace: "{{ webserver_ns }}"
+            name: "{{ webserver_name }}"
+          register: dep_after
+
+        - name: DEBUG - deployment actual state after apply
+          debug:
+            msg:
+              - "dep found={{ dep_after.resources | default([]) | length }}"
+              - "dep container name={{ dep_after.resources[0].spec.template.spec.containers[0].name | default('') }}"
+              - "dep container image={{ dep_after.resources[0].spec.template.spec.containers[0].image | default('') }}"
+              - "dep observedGeneration={{ dep_after.resources[0].status.observedGeneration | default('') }}"
+              - "dep generation={{ dep_after.resources[0].metadata.generation | default('') }}"
+          when:
+            - debug_enabled | bool
+            - (dep_after.resources | default([]) | length) > 0
 
         #################################################################
         # Ensure Service exists
@@ -167,6 +279,13 @@
                 name: "{{ webserver_name }}"
                 namespace: "{{ webserver_ns }}"
                 labels: "{{ labels }}"
+                ownerReferences:
+                  - apiVersion: "{{ cr_api_version }}"
+                    kind: "{{ cr_kind }}"
+                    name: "{{ webserver_name }}"
+                    uid: "{{ cr_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
               spec:
                 selector:
                   app: "{{ webserver_name }}"
@@ -175,6 +294,24 @@
                     port: 80
                     targetPort: http
                     protocol: TCP
+
+        - name: Read back Service after apply (confirm selector)
+          k8s_info:
+            api_version: v1
+            kind: Service
+            namespace: "{{ webserver_ns }}"
+            name: "{{ webserver_name }}"
+          register: svc_after
+
+        - name: DEBUG - service actual state
+          debug:
+            msg:
+              - "svc found={{ svc_after.resources | default([]) | length }}"
+              - "svc selector={{ svc_after.resources[0].spec.selector | default({}) }}"
+              - "svc ports={{ svc_after.resources[0].spec.ports | default([]) }}"
+          when:
+            - debug_enabled | bool
+            - (svc_after.resources | default([]) | length) > 0
 
         #################################################################
         # Ensure Route exists
@@ -189,6 +326,13 @@
                 name: "{{ webserver_name }}"
                 namespace: "{{ webserver_ns }}"
                 labels: "{{ labels }}"
+                ownerReferences:
+                  - apiVersion: "{{ cr_api_version }}"
+                    kind: "{{ cr_kind }}"
+                    name: "{{ webserver_name }}"
+                    uid: "{{ cr_uid }}"
+                    controller: true
+                    blockOwnerDeletion: true
               spec:
                 to:
                   kind: Service
@@ -197,6 +341,25 @@
                   targetPort: http
                 tls:
                   termination: edge
+
+        - name: Read back Route after apply (confirm)
+          k8s_info:
+            api_version: route.openshift.io/v1
+            kind: Route
+            namespace: "{{ webserver_ns }}"
+            name: "{{ webserver_name }}"
+          register: route_after
+
+        - name: DEBUG - route actual state
+          debug:
+            msg:
+              - "route found={{ route_after.resources | default([]) | length }}"
+              - "route to.service={{ route_after.resources[0].spec.to.name | default('') }}"
+              - "route targetPort={{ route_after.resources[0].spec.port.targetPort | default('') }}"
+              - "route tls.termination={{ route_after.resources[0].spec.tls.termination | default('') }}"
+          when:
+            - debug_enabled | bool
+            - (route_after.resources | default([]) | length) > 0
 
         #################################################################
         # Update status
