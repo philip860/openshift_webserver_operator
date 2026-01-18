@@ -2927,6 +2927,8 @@ spec:
                             fieldPath: metadata.name
                       - name: OPERATOR_NAME
                         value: webserver-operator
+                      - name: WEBSERVER_OPERATOR_VERSION
+                        value: "v1.0.34-dev"
       permissions:
         - serviceAccountName: webserver-operator
           rules:
