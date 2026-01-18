@@ -75,7 +75,7 @@
     # Deployment
     #################################################################
     - name: Ensure Deployment exists for selected web server
-      community.kubernetes.k8s:
+      kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: apps/v1
@@ -134,7 +134,7 @@
     # Service
     #################################################################
     - name: Ensure Service exists
-      community.kubernetes.k8s:
+      kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: v1
@@ -158,7 +158,7 @@
     # Route (OpenShift)
     #################################################################
     - name: Ensure Route exists
-      community.kubernetes.k8s:
+      kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: route.openshift.io/v1
