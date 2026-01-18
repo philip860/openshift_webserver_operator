@@ -1,6 +1,6 @@
 ---
 collections:
-  - name: kubernetes.core
+  - name: kubernetes.core.k8s
     # Optional: pin a version if you want
     # version: ">=2.4.0"
 
