@@ -8,13 +8,17 @@
 
     operator_version: "{{ lookup('env', 'WEBSERVER_OPERATOR_VERSION') | default('dev-unknown', true) }}"
 
-    nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
+    # OpenShift-friendly defaults
+    nginx_image_default:  "nginxinc/nginx-unprivileged:stable-alpine"
     apache_image_default: "docker.io/library/httpd:2.4-alpine"
 
     cr_read_retries: 12
     cr_read_delay: 5
 
   tasks:
+    #################################################################
+    # Read the WebServer CR (authoritative)
+    #################################################################
     - name: Read WebServer CR from API (authoritative, with retries)
       kubernetes.core.k8s_info:
         api_version: example.com/v1alpha1
@@ -38,7 +42,10 @@
       set_fact:
         spec_obj: "{{ ws_cr.resources[0].spec | default({}) }}"
 
-    - name: Normalize values from spec_obj
+    #################################################################
+    # Normalize spec values
+    #################################################################
+    - name: Normalize server type + other spec values
       set_fact:
         server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
         server_type: "{{ (spec_obj.get('type', 'nginx')) | string | lower | trim }}"
@@ -114,9 +121,9 @@
       when: server_type in ['apache','httpd']
 
     #################################################################
-    # Apache webroot (index.html + healthz)
+    # Webroot for apache + nginx (index.html + healthz)
     #################################################################
-    - name: Ensure Apache webroot ConfigMap exists (index.html + healthz)
+    - name: Ensure webroot ConfigMap exists (index.html + healthz)
       kubernetes.core.k8s:
         state: present
         definition:
@@ -139,12 +146,46 @@
                 </body>
               </html>
             healthz: "ok\n"
-      when: server_type in ['apache','httpd']
 
     #################################################################
-    # Deployment
+    # NGINX: provide config that listens on {{ port }} and serves webroot
+    # (avoids writing to /etc/nginx and avoids /var/cache perms)
     #################################################################
-    - name: Ensure Deployment exists for selected web server
+    - name: Ensure NGINX config ConfigMap exists (listen on {{ port }}, serve webroot)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ webserver_name }}-nginx-conf"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          data:
+            default.conf: |
+              server {
+                listen       {{ port }};
+                listen  [::]:{{ port }};
+                server_name  _;
+                root   /usr/share/nginx/html;
+
+                location = /healthz {
+                  default_type text/plain;
+                  return 200 "ok\n";
+                }
+
+                location / {
+                  try_files $uri $uri/ /index.html;
+                }
+              }
+      when: server_type == 'nginx'
+
+    #################################################################
+    # Deployment (Apache path)
+    #################################################################
+    - name: Ensure Deployment exists (apache/httpd path)
       kubernetes.core.k8s:
         state: present
         definition:
@@ -177,46 +218,35 @@
                 containers:
                   - name: "{{ container_name }}"
                     image: "{{ container_image }}"
-                    # Apache: force our config + foreground.
-                    command: >-
-                      {{ (server_type in ['apache','httpd'])
-                         | ternary(
-                             ['httpd','-DFOREGROUND','-f','/opt/apache-conf/httpd.conf'],
-                             omit
-                           )
-                      }}
+                    command: ['httpd','-DFOREGROUND','-f','/opt/apache-conf/httpd.conf']
                     ports:
                       - name: http
                         containerPort: "{{ port }}"
                     volumeMounts:
                       - name: webroot
-                        mountPath: >-
-                          {{ (server_type in ['apache','httpd'])
-                             | ternary('/usr/local/apache2/htdocs', '/usr/share/nginx/html')
-                          }}
+                        mountPath: /usr/local/apache2/htdocs
                         readOnly: true
                       - name: apacheconf
                         mountPath: /opt/apache-conf
                         readOnly: true
                     readinessProbe:
                       httpGet:
-                        path: "{{ probe_path }}"
+                        path: /healthz
                         port: http
                       initialDelaySeconds: 5
                       periodSeconds: 10
                     livenessProbe:
                       httpGet:
-                        path: "{{ probe_path }}"
+                        path: /healthz
                         port: http
                       initialDelaySeconds: 10
                       periodSeconds: 20
-      vars:
-        # Only mount apache volumes when apache/httpd; nginx doesn't need them.
-        # We do this by re-defining volumes/volumeMounts cleanly per type below.
-        # (This "vars" block is only used to keep YAML simple.)
       when: server_type in ['apache','httpd']
 
-    - name: Ensure Deployment exists for selected web server (nginx path)
+    #################################################################
+    # Deployment (NGINX path) - OpenShift-safe
+    #################################################################
+    - name: Ensure Deployment exists (nginx path)
       kubernetes.core.k8s:
         state: present
         definition:
@@ -239,25 +269,69 @@
                 annotations:
                   webserver-operator/version: "{{ operator_version }}"
               spec:
+                volumes:
+                  - name: webroot
+                    configMap:
+                      name: "{{ webserver_name }}-webroot"
+                  - name: nginxconf
+                    configMap:
+                      name: "{{ webserver_name }}-nginx-conf"
+                      items:
+                        - key: default.conf
+                          path: default.conf
+                  - name: nginxcache
+                    emptyDir: {}
+                  - name: nginxtmp
+                    emptyDir: {}
+                  - name: nginxrun
+                    emptyDir: {}
                 containers:
                   - name: "{{ container_name }}"
                     image: "{{ container_image }}"
                     ports:
                       - name: http
                         containerPort: "{{ port }}"
+                    env:
+                      # Force nginx temp/cache paths to writable locations
+                      - name: NGINX_CLIENT_TEMP_PATH
+                        value: /tmp/nginx/client_temp
+                      - name: NGINX_PROXY_TEMP_PATH
+                        value: /tmp/nginx/proxy_temp
+                      - name: NGINX_FASTCGI_TEMP_PATH
+                        value: /tmp/nginx/fastcgi_temp
+                      - name: NGINX_UWSGI_TEMP_PATH
+                        value: /tmp/nginx/uwsgi_temp
+                      - name: NGINX_SCGI_TEMP_PATH
+                        value: /tmp/nginx/scgi_temp
+                    volumeMounts:
+                      - name: webroot
+                        mountPath: /usr/share/nginx/html
+                        readOnly: true
+                      # Provide server config without modifying image FS
+                      - name: nginxconf
+                        mountPath: /etc/nginx/conf.d/default.conf
+                        subPath: default.conf
+                        readOnly: true
+                      # Writable locations
+                      - name: nginxcache
+                        mountPath: /var/cache/nginx
+                      - name: nginxtmp
+                        mountPath: /tmp/nginx
+                      - name: nginxrun
+                        mountPath: /var/run
                     readinessProbe:
                       httpGet:
-                        path: "{{ probe_path }}"
+                        path: /
                         port: http
                       initialDelaySeconds: 5
                       periodSeconds: 10
                     livenessProbe:
                       httpGet:
-                        path: "{{ probe_path }}"
+                        path: /
                         port: http
                       initialDelaySeconds: 10
                       periodSeconds: 20
-      when: server_type not in ['apache','httpd']
+      when: server_type == 'nginx'
 
     #################################################################
     # Service
@@ -321,6 +395,9 @@
           operatorVersion: "{{ operator_version }}"
           message: "Operator {{ operator_version }} deployed {{ container_name }} with {{ replicas }} replica(s) on port {{ port }}"
 
+    #################################################################
+    # Final version banner
+    #################################################################
     - name: VERSION BANNER - operator version running
       debug:
         msg:
