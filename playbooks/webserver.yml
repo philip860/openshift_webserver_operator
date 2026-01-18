@@ -6,20 +6,15 @@
     webserver_name: "{{ ansible_operator_meta.name }}"
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
-    # Operator version stamp (override by env var in the operator deployment/CSV)
     operator_version: "{{ lookup('env', 'WEBSERVER_OPERATOR_VERSION') | default('dev-unknown', true) }}"
 
     nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
     apache_image_default: "docker.io/library/httpd:2.4-alpine"
 
-    # API flap resilience
     cr_read_retries: 12
     cr_read_delay: 5
 
   tasks:
-    #################################################################
-    # Read the WebServer CR (authoritative) so we always have .spec
-    #################################################################
     - name: Read WebServer CR from API (authoritative, with retries)
       kubernetes.core.k8s_info:
         api_version: example.com/v1alpha1
@@ -43,10 +38,7 @@
       set_fact:
         spec_obj: "{{ ws_cr.resources[0].spec | default({}) }}"
 
-    #################################################################
-    # Normalize values from spec_obj
-    #################################################################
-    - name: Normalize server type + other spec values
+    - name: Normalize values from spec_obj
       set_fact:
         server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
         server_type: "{{ (spec_obj.get('type', 'nginx')) | string | lower | trim }}"
@@ -79,7 +71,50 @@
         container_name: "{{ 'apache' if server_type in ['apache','httpd'] else 'nginx' }}"
 
     #################################################################
-    # Apache webroot (fix 403 on / + reliable health endpoint)
+    # Apache: config override to listen on {{ port }} and log to stdout
+    #################################################################
+    - name: Ensure Apache config ConfigMap exists (listen on unprivileged port + stdout logs)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ webserver_name }}-apache-conf"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          data:
+            httpd.conf: |
+              ServerName localhost
+              Listen {{ port }}
+
+              LoadModule mpm_event_module modules/mod_mpm_event.so
+              LoadModule unixd_module modules/mod_unixd.so
+              LoadModule authz_core_module modules/mod_authz_core.so
+              LoadModule dir_module modules/mod_dir.so
+              LoadModule mime_module modules/mod_mime.so
+              LoadModule log_config_module modules/mod_log_config.so
+              LoadModule alias_module modules/mod_alias.so
+
+              PidFile /tmp/httpd.pid
+
+              DocumentRoot "/usr/local/apache2/htdocs"
+              <Directory "/usr/local/apache2/htdocs">
+                  Require all granted
+                  AllowOverride None
+                  Options Indexes FollowSymLinks
+              </Directory>
+
+              DirectoryIndex index.html
+
+              ErrorLog /proc/self/fd/2
+              CustomLog /proc/self/fd/1 combined
+      when: server_type in ['apache','httpd']
+
+    #################################################################
+    # Apache webroot (index.html + healthz)
     #################################################################
     - name: Ensure Apache webroot ConfigMap exists (index.html + healthz)
       kubernetes.core.k8s:
@@ -132,26 +167,37 @@
                 annotations:
                   webserver-operator/version: "{{ operator_version }}"
               spec:
-                volumes: >-
-                  {{ (server_type in ['apache','httpd'])
-                     | ternary(
-                         [ { 'name': 'webroot', 'configMap': { 'name': webserver_name ~ '-webroot' } } ],
-                         omit
-                       )
-                  }}
+                volumes:
+                  - name: webroot
+                    configMap:
+                      name: "{{ webserver_name }}-webroot"
+                  - name: apacheconf
+                    configMap:
+                      name: "{{ webserver_name }}-apache-conf"
                 containers:
                   - name: "{{ container_name }}"
                     image: "{{ container_image }}"
-                    ports:
-                      - name: http
-                        containerPort: "{{ port }}"
-                    volumeMounts: >-
+                    # Apache: force our config + foreground.
+                    command: >-
                       {{ (server_type in ['apache','httpd'])
                          | ternary(
-                             [ { 'name': 'webroot', 'mountPath': '/usr/local/apache2/htdocs', 'readOnly': true } ],
+                             ['httpd','-DFOREGROUND','-f','/opt/apache-conf/httpd.conf'],
                              omit
                            )
                       }}
+                    ports:
+                      - name: http
+                        containerPort: "{{ port }}"
+                    volumeMounts:
+                      - name: webroot
+                        mountPath: >-
+                          {{ (server_type in ['apache','httpd'])
+                             | ternary('/usr/local/apache2/htdocs', '/usr/share/nginx/html')
+                          }}
+                        readOnly: true
+                      - name: apacheconf
+                        mountPath: /opt/apache-conf
+                        readOnly: true
                     readinessProbe:
                       httpGet:
                         path: "{{ probe_path }}"
@@ -164,6 +210,54 @@
                         port: http
                       initialDelaySeconds: 10
                       periodSeconds: 20
+      vars:
+        # Only mount apache volumes when apache/httpd; nginx doesn't need them.
+        # We do this by re-defining volumes/volumeMounts cleanly per type below.
+        # (This "vars" block is only used to keep YAML simple.)
+      when: server_type in ['apache','httpd']
+
+    - name: Ensure Deployment exists for selected web server (nginx path)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ webserver_name }}"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          spec:
+            replicas: "{{ replicas }}"
+            selector:
+              matchLabels:
+                app: "{{ webserver_name }}"
+            template:
+              metadata:
+                labels: "{{ labels }}"
+                annotations:
+                  webserver-operator/version: "{{ operator_version }}"
+              spec:
+                containers:
+                  - name: "{{ container_name }}"
+                    image: "{{ container_image }}"
+                    ports:
+                      - name: http
+                        containerPort: "{{ port }}"
+                    readinessProbe:
+                      httpGet:
+                        path: "{{ probe_path }}"
+                        port: http
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    livenessProbe:
+                      httpGet:
+                        path: "{{ probe_path }}"
+                        port: http
+                      initialDelaySeconds: 10
+                      periodSeconds: 20
+      when: server_type not in ['apache','httpd']
 
     #################################################################
     # Service
@@ -227,9 +321,6 @@
           operatorVersion: "{{ operator_version }}"
           message: "Operator {{ operator_version }} deployed {{ container_name }} with {{ replicas }} replica(s) on port {{ port }}"
 
-    #################################################################
-    # Final version banner (log signal)
-    #################################################################
     - name: VERSION BANNER - operator version running
       debug:
         msg:
