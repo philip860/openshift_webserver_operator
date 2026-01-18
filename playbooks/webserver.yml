@@ -49,7 +49,7 @@
     # Apache webroot (fix 403 on / + reliable health endpoint)
     #################################################################
     - name: Ensure Apache webroot ConfigMap exists (index.html + healthz)
-      community.kubernetes.k8s:
+      kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: v1
