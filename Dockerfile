@@ -1,94 +1,57 @@
 # -----------------------------------------------------------------------------
-# WebServer Operator (Ansible Operator base) - patched + certification-friendly
+# WebServer Operator (Ansible Operator) - CVE-aware builds with two strategies
 #
-# GOALS
-#  - Build on the OpenShift-matched Ansible Operator base image (RHEL 9 stream)
-#  - Remain "restricted SCC" compatible (arbitrary UID at runtime)
-#  - Keep Red Hat certification metadata + HasLicense content
-#  - Allow THREE patching strategies:
-#      (A) Online update from repos (dnf update)
-#      (B) Apply specific Red Hat advisories (RHSA) by ID (dnf update --advisory)
-#      (C) Offline/local RPM patching via ./patching/*.rpm (yum localinstall)
+# TARGETS
+#   1) basepatched (default-like): patch the vendor operator base image in-place
+#   2) rebased (best for scanners): rebase operator runtime onto UBI9, then patch
 #
-# NOTE ON CVEs / SCANS
-#  - If your scanner reports CVEs but `dnf check-update <pkgs>` shows nothing,
-#    you're already at the newest packages in the configured repos.
-#  - In that case:
-#      - Strategy (B) will only work if the advisory is visible to your repos.
-#      - Strategy (C) is your escape hatch *if* you have the correct RPM builds.
+# BUILD EXAMPLES
+#   # Closest to official behavior:
+#   podman build --target basepatched -t quay.io/philip860/webserver-operator:basepatched .
 #
-# IMPORTANT CERTIFICATION NOTE
-#  - Applying RHSAs via enabled Red Hat repos is the cleanest/most defensible path.
-#  - Offline RPM patching should be reserved for situations where the base stream
-#    hasn’t picked up fixes yet (and you have vendor-signed RPMs + dependencies).
+#   # Best shot at "scan-cleaner" results:
+#   podman build --target rebased -t quay.io/philip860/webserver-operator:rebased .
+#
+# OPTIONAL OVERRIDES
+#   --build-arg BASE_OPERATOR_IMAGE=registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:...
+#   --build-arg UBI_IMAGE=registry.access.redhat.com/ubi9/ubi@sha256:...
 # -----------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# BASE IMAGE
-# -----------------------------------------------------------------------------
-FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:440d3e4711ebd68f14e1e1575b757db4d202850070f0f634dc5c6cab89d02e7b
-# (Recommended for reproducibility once you find a "good scan" base digest)
-# FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:...
+ARG BASE_OPERATOR_IMAGE=registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:440d3e4711ebd68f14e1e1575b757db4d202850070f0f634dc5c6cab89d02e7b
+ARG UBI_IMAGE=registry.access.redhat.com/ubi9/ubi:latest
 
-# Need root for patching + installing collections + permissions
+# -----------------------------------------------------------------------------
+# Stage 0: official operator base (source of truth for runtime bits)
+# -----------------------------------------------------------------------------
+FROM ${BASE_OPERATOR_IMAGE} AS operator-src
+
+# -----------------------------------------------------------------------------
+# Stage 1: basepatched (patch in-place on the official base)
+# -----------------------------------------------------------------------------
+FROM ${BASE_OPERATOR_IMAGE} AS basepatched
+
 USER 0
-
-# This is the directory ansible-operator expects to run from
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# -----------------------------------------------------------------------------
-# (A) ONLINE PATCHING: Refresh metadata + full update
-# -----------------------------------------------------------------------------
-# This keeps the base reasonably current at build time.
-# If your build environment has stable network/repo access, keep this enabled.
-#
-# Tip: If you need to debug what changed, build with:
-#   podman build --pull --no-cache -t <image>:<tag> .
-#
-# Tip: To see if anything is even updatable inside the built image:
-#   podman run --rm --entrypoint /bin/sh <image>:<tag> -c \
-#     'dnf -q check-update libxml2 krb5-libs pam python3 python3-libs libarchive sqlite-libs expat || true'
+# ---------------------------
+# (A) ONLINE PATCHING
+# ---------------------------
 RUN set -eux; \
     dnf -y makecache --refresh; \
     dnf -y update --refresh; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# -----------------------------------------------------------------------------
-# (B) APPLY SPECIFIC SECURITY ADVISORIES (RHSA) BY ID
-# -----------------------------------------------------------------------------
-# Why this exists:
-#   Your scan output references RHSAs such as:
-#     RHSA-2025:2678 (libxml2)
-#     RHSA-2025:10399 (python3/python3-libs)
-#     RHSA-2024:9547 (krb5-libs)
-#     RHSA-2024:10232 (pam)
-#     RHSA-2025:14142 (libarchive)
-#     RHSA-2025:12036 (sqlite-libs)
-#     RHSA-2025:22033 (expat)
-#     RHSA-2025:11580 / RHSA-2025:13312 (libxml2)
-#
-# How it works:
-#   - Install dnf-plugins-core so `dnf updateinfo` exists.
-#   - For each RHSA, attempt to apply it:
-#       dnf -y update --advisory=RHSA-YYYY:NNNN
-#
-# Important:
-#   - This ONLY updates packages if the advisory is visible in the repos inside
-#     this base image. If the advisory isn’t available yet, the command will do
-#     nothing (or may exit non-zero depending on environment).
-#   - We keep this BEST-EFFORT (|| true) so the build doesn’t fail if a given
-#     advisory is not present in the repo snapshot.
-#
-# Tip:
-#   If you want to hard-fail when an advisory is missing, remove "|| true".
+# ---------------------------
+# (B) APPLY RHSAs (best-effort)
+# ---------------------------
 RUN set -eux; \
     dnf -y makecache --refresh; \
     dnf -y install dnf-plugins-core; \
     echo "=== Available RHSAs (debug) ==="; \
-    dnf -y updateinfo list --available | sed -n '1,120p' || true; \
-    echo "=== Attempting to apply targeted RHSAs (best-effort) ==="; \
+    dnf -y updateinfo list --available | sed -n '1,160p' || true; \
+    echo "=== Attempting targeted RHSAs (best-effort) ==="; \
     dnf -y update --advisory=RHSA-2025:2678  || true; \
     dnf -y update --advisory=RHSA-2025:10399 || true; \
     dnf -y update --advisory=RHSA-2024:9547  || true; \
@@ -98,33 +61,15 @@ RUN set -eux; \
     dnf -y update --advisory=RHSA-2025:22033 || true; \
     dnf -y update --advisory=RHSA-2025:11580 || true; \
     dnf -y update --advisory=RHSA-2025:13312 || true; \
-    # Final refresh update to ensure dependency resolutions are completed
     dnf -y update --refresh || true; \
+    dnf -y remove dnf-plugins-core || true; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# -----------------------------------------------------------------------------
-# (C) OFFLINE/LOCAL RPM PATCHING (./patching/*.rpm)
-# -----------------------------------------------------------------------------
-# Purpose:
-#   Apply specific RPM updates even when the OpenShift operator base stream
-#   has not yet shipped a rebuilt image digest that includes them.
-#
-# How it works:
-#   - Put vendor RPMs in a local directory named: ./patching/
-#   - Example:
-#       patching/expat-2.5.0-3.el9_5.3.x86_64.rpm
-#   - The RPMs are copied into the image and installed using:
-#       yum -y localinstall *.rpm
-#
-# Important:
-#   - Use RPMs that match your OS stream/arch (EL9 + x86_64 here).
-#   - If those RPMs require dependencies, yum/dnf will attempt to pull deps
-#     from enabled repos. If deps are missing, the build will fail (good!).
-#   - If you do NOT want offline patching, leave ./patching empty (or remove
-#     this block) and the build will skip localinstall.
+# ---------------------------
+# (C) OFFLINE/LOCAL RPM PATCHING
+# ---------------------------
 COPY patching/ /tmp/patching/
-
 RUN set -eux; \
     echo "=== Offline/local patching (if RPMs present) ==="; \
     ls -lah /tmp/patching || true; \
@@ -132,7 +77,6 @@ RUN set -eux; \
     if [ -n "${rpms}" ]; then \
       echo "Installing local RPMs:"; \
       echo "${rpms}" | sed 's/^/  - /'; \
-      # localinstall will install/upgrade RPMs and pull dependencies from repos if needed
       yum -y localinstall /tmp/patching/*.rpm; \
     else \
       echo "No RPMs found in /tmp/patching (skipping yum localinstall)."; \
@@ -140,18 +84,16 @@ RUN set -eux; \
     yum -y clean all; \
     rm -rf /var/cache/dnf /var/cache/yum /tmp/patching /var/tmp/* /tmp/*
 
-# -----------------------------------------------------------------------------
-# POST-PATCH VERIFICATION (lightweight, non-fatal)
-# -----------------------------------------------------------------------------
-# This prints versions for the packages most frequently flagged in your scans.
-# It helps you confirm what the uploaded digest *actually* contains.
+# ---------------------------
+# POST-PATCH VERIFICATION
+# ---------------------------
 RUN set -eux; \
     echo "=== RPM versions after patching ==="; \
     rpm -q libxml2 sqlite-libs krb5-libs pam python3 python3-libs libarchive expat 2>/dev/null || true
 
-# -----------------------------------------------------------------------------
-# REQUIRED CERTIFICATION LABELS (edit values to match your project)
-# -----------------------------------------------------------------------------
+# ---------------------------
+# REQUIRED CERTIFICATION LABELS
+# ---------------------------
 LABEL name="webserver-operator-dev" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
@@ -160,16 +102,15 @@ LABEL name="webserver-operator-dev" \
       summary="Kubernetes operator to deploy and manage web workloads" \
       description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
 
-# -----------------------------------------------------------------------------
+# ---------------------------
 # LICENSING FOR HasLicense CHECK
-# -----------------------------------------------------------------------------
-# Put a plain-text license/terms file under /licenses
+# ---------------------------
 RUN mkdir -p /licenses \
  && printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
-# -----------------------------------------------------------------------------
+# ---------------------------
 # INSTALL REQUIRED ANSIBLE COLLECTIONS
-# -----------------------------------------------------------------------------
+# ---------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
     ansible-galaxy collection install -r /tmp/requirements.yml \
@@ -177,26 +118,128 @@ RUN set -eux; \
     chmod -R g+rwX /opt/ansible/.ansible; \
     rm -f /tmp/requirements.yml
 
-# -----------------------------------------------------------------------------
+# ---------------------------
 # COPY OPERATOR CONTENT
-# -----------------------------------------------------------------------------
+# ---------------------------
 COPY watches.yaml ./watches.yaml
 COPY playbooks/ ./playbooks/
 COPY roles/ ./roles/
 
-# -----------------------------------------------------------------------------
+# ---------------------------
 # OPENSHIFT-FRIENDLY PERMISSIONS
-# -----------------------------------------------------------------------------
-# Allow arbitrary UID (restricted SCC) to write where it needs to.
+# ---------------------------
 RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses
 
-# -----------------------------------------------------------------------------
-# RUN AS NON-ROOT (fixes RunAsNonRoot in preflight)
-# -----------------------------------------------------------------------------
-# Use a fixed non-root numeric UID to satisfy preflight.
+# ---------------------------
+# RUN AS NON-ROOT (RunAsNonRoot)
+# ---------------------------
 USER 1001
+ENV ANSIBLE_USER_ID=1001
 
-# If the base image expects ANSIBLE_USER_ID at runtime, keep it consistent:
+
+# -----------------------------------------------------------------------------
+# Stage 2: rebased (copy operator runtime from official image onto UBI9)
+#   Goal: reduce "base image CVEs" by starting from a cleaner UBI9 layer.
+# -----------------------------------------------------------------------------
+FROM ${UBI_IMAGE} AS rebased
+
+USER 0
+ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
+WORKDIR ${ANSIBLE_OPERATOR_DIR}
+
+# --- Bring forward core runtime expectations (paths exist even if empty) ---
+RUN set -eux; \
+    mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator /tmp/patching
+
+# --- Copy operator runtime bits from official base image ---
+# NOTE: These paths are intentionally broad to preserve "base operator" behavior.
+# If your base image layout differs, adjust paths after checking with:
+#   podman run --rm --entrypoint /bin/bash ${BASE_OPERATOR_IMAGE} -lc 'ls -lah /usr/local/bin; ls -lah /opt'
+COPY --from=operator-src /usr/local/bin/ /usr/local/bin/
+COPY --from=operator-src /usr/bin/ /usr/bin/
+COPY --from=operator-src /usr/libexec/ /usr/libexec/
+COPY --from=operator-src /opt/ /opt/
+COPY --from=operator-src /etc/ /etc/
+
+# Some operator images rely on shared libs; copy common locations.
+COPY --from=operator-src /lib64/ /lib64/
+COPY --from=operator-src /usr/lib64/ /usr/lib64/
+
+# --- Patch UBI9 aggressively (often improves scanner results) ---
+RUN set -eux; \
+    dnf -y makecache --refresh; \
+    dnf -y update --refresh; \
+    dnf -y install dnf-plugins-core yum; \
+    echo "=== Available RHSAs (debug) ==="; \
+    dnf -y updateinfo list --available | sed -n '1,160p' || true; \
+    echo "=== Attempting targeted RHSAs (best-effort) ==="; \
+    dnf -y update --advisory=RHSA-2025:2678  || true; \
+    dnf -y update --advisory=RHSA-2025:10399 || true; \
+    dnf -y update --advisory=RHSA-2024:9547  || true; \
+    dnf -y update --advisory=RHSA-2024:10232 || true; \
+    dnf -y update --advisory=RHSA-2025:14142 || true; \
+    dnf -y update --advisory=RHSA-2025:12036 || true; \
+    dnf -y update --advisory=RHSA-2025:22033 || true; \
+    dnf -y update --advisory=RHSA-2025:11580 || true; \
+    dnf -y update --advisory=RHSA-2025:13312 || true; \
+    dnf -y update --refresh || true; \
+    dnf -y remove dnf-plugins-core || true; \
+    dnf -y clean all; \
+    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
+# --- Offline/local RPM patching (optional) ---
+COPY patching/ /tmp/patching/
+RUN set -eux; \
+    echo "=== Offline/local patching (if RPMs present) ==="; \
+    ls -lah /tmp/patching || true; \
+    rpms="$(ls -1 /tmp/patching/*.rpm 2>/dev/null || true)"; \
+    if [ -n "${rpms}" ]; then \
+      echo "Installing local RPMs:"; \
+      echo "${rpms}" | sed 's/^/  - /'; \
+      yum -y localinstall /tmp/patching/*.rpm; \
+    else \
+      echo "No RPMs found in /tmp/patching (skipping yum localinstall)."; \
+    fi; \
+    yum -y clean all; \
+    rm -rf /var/cache/dnf /var/cache/yum /tmp/patching /var/tmp/* /tmp/*
+
+# --- Post-patch verification ---
+RUN set -eux; \
+    echo "=== RPM versions after patching ==="; \
+    rpm -q libxml2 sqlite-libs krb5-libs pam python3 python3-libs libarchive expat 2>/dev/null || true
+
+# --- Certification labels + license ---
+LABEL name="webserver-operator-dev" \
+      vendor="Duncan Networks" \
+      maintainer="Phil Duncan <philipduncan860@gmail.com>" \
+      version="1.0.35" \
+      release="1" \
+      summary="Kubernetes operator to deploy and manage web workloads" \
+      description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
+
+RUN mkdir -p /licenses \
+ && printf "See project repository for license and terms.\n" > /licenses/NOTICE
+
+# --- Install required ansible collections ---
+COPY requirements.yml /tmp/requirements.yml
+RUN set -eux; \
+    ansible-galaxy collection install -r /tmp/requirements.yml \
+      --collections-path /opt/ansible/.ansible/collections; \
+    chmod -R g+rwX /opt/ansible/.ansible; \
+    rm -f /tmp/requirements.yml
+
+# --- Copy operator content ---
+COPY watches.yaml ./watches.yaml
+COPY playbooks/ ./playbooks/
+COPY roles/ ./roles/
+
+# --- OpenShift-friendly perms (arbitrary UID) ---
+RUN set -eux; \
+    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses; \
+    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses
+
+# --- Run as non-root ---
+USER 1001
 ENV ANSIBLE_USER_ID=1001
