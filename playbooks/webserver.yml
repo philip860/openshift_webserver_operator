@@ -7,19 +7,52 @@
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
     # Operator version stamp (override by env var in the operator deployment/CSV)
-    # Example env var value: "v1.0.34-dev" or a git SHA
     operator_version: "{{ lookup('env', 'WEBSERVER_OPERATOR_VERSION') | default('dev-unknown', true) }}"
-
-    # normalize + defaults
-    server_type_raw: "{{ spec.type | default('nginx') }}"
-    server_type: "{{ (spec.type | default('nginx')) | lower | trim }}"
-    replicas: "{{ (spec.replicas | default(1)) | int }}"
-    port: "{{ (spec.port | default(8080)) | int }}"
 
     nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
     apache_image_default: "docker.io/library/httpd:2.4-alpine"
 
+    # API flap resilience
+    cr_read_retries: 12
+    cr_read_delay: 5
+
   tasks:
+    #################################################################
+    # Read the WebServer CR (authoritative) so we always have .spec
+    #################################################################
+    - name: Read WebServer CR from API (authoritative, with retries)
+      kubernetes.core.k8s_info:
+        api_version: example.com/v1alpha1
+        kind: WebServer
+        namespace: "{{ webserver_ns }}"
+        name: "{{ webserver_name }}"
+      register: ws_cr
+      retries: "{{ cr_read_retries }}"
+      delay: "{{ cr_read_delay }}"
+      until: (ws_cr.resources | default([]) | length) > 0
+
+    - name: Fail if CR could not be read
+      fail:
+        msg: >-
+          Unable to read WebServer {{ webserver_name }} in namespace {{ webserver_ns }}
+          after {{ cr_read_retries }} retries (delay={{ cr_read_delay }}s).
+          ws_cr.resources={{ ws_cr.resources | default([]) }}
+      when: (ws_cr.resources | default([]) | length) == 0
+
+    - name: Extract spec as dict (safe access)
+      set_fact:
+        spec_obj: "{{ ws_cr.resources[0].spec | default({}) }}"
+
+    #################################################################
+    # Normalize values from spec_obj
+    #################################################################
+    - name: Normalize server type + other spec values
+      set_fact:
+        server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
+        server_type: "{{ (spec_obj.get('type', 'nginx')) | string | lower | trim }}"
+        replicas: "{{ spec_obj.get('replicas', 1) | int }}"
+        port: "{{ spec_obj.get('port', 8080) | int }}"
+
     - name: Validate server_type
       fail:
         msg: "Unsupported spec.type='{{ server_type_raw }}' (normalized='{{ server_type }}'). Use nginx, apache, or httpd."
@@ -28,8 +61,8 @@
     - name: Pick image based on type (allow spec.image override)
       set_fact:
         container_image: >-
-          {{ (spec.image | default('') | string | trim | length > 0)
-             | ternary(spec.image | string | trim,
+          {{ (spec_obj.get('image', '') | string | trim | length > 0)
+             | ternary(spec_obj.get('image', '') | string | trim,
                        (apache_image_default if server_type in ['apache','httpd'] else nginx_image_default)) }}
 
     - name: Set labels
@@ -40,7 +73,7 @@
           app.kubernetes.io/managed-by: "webserver-operator"
           app: "{{ webserver_name }}"
 
-    - name: Set probe path
+    - name: Set probe path + container name
       set_fact:
         probe_path: "{{ '/healthz' if server_type in ['apache','httpd'] else '/' }}"
         container_name: "{{ 'apache' if server_type in ['apache','httpd'] else 'nginx' }}"
@@ -58,6 +91,8 @@
             name: "{{ webserver_name }}-webroot"
             namespace: "{{ webserver_ns }}"
             labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
           data:
             index.html: |
               <!doctype html>
