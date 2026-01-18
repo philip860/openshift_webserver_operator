@@ -26,7 +26,7 @@
 # -----------------------------------------------------------------------------
 # BASE IMAGE
 # -----------------------------------------------------------------------------
-FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator:v4.20
+FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:440d3e4711ebd68f14e1e1575b757db4d202850070f0f634dc5c6cab89d02e7b
 # (Recommended for reproducibility once you find a "good scan" base digest)
 # FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:...
 
