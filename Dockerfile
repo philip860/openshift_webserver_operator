@@ -2,7 +2,8 @@
 # WebServer Operator (Ansible Operator base) - patched + certification-friendly
 # -----------------------------------------------------------------------------
 #FROM quay.io/operator-framework/ansible-operator:v1.34.1
-FROM quay.io/operator-framework/ansible-operator:latest
+#FROM quay.io/operator-framework/ansible-operator:latest
+FROM registry.redhat.io/openshift4/ose-ansible-operator:v4.20
 
 # Need root for patching + installing collections + permissions
 USER 0
