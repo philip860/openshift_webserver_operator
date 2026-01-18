@@ -3,428 +3,204 @@
   gather_facts: false
 
   vars:
-    # Name/namespace from the WebServer CR
     webserver_name: "{{ ansible_operator_meta.name }}"
     webserver_ns:   "{{ ansible_operator_meta.namespace }}"
 
-    # Default images (OpenShift-friendly)
-    nginx_image_default:  "nginxinc/nginx-unprivileged:stable-alpine"
-    apache_image_default: "registry.access.redhat.com/ubi8/httpd-24"
+    # Operator version stamp (override by env var in the operator deployment/CSV)
+    # Example env var value: "v1.0.34-dev" or a git SHA
+    operator_version: "{{ lookup('env', 'WEBSERVER_OPERATOR_VERSION') | default('dev-unknown', true) }}"
 
-    # API flap resilience for reading the CR
-    cr_read_retries: 12
-    cr_read_delay: 5
+    # normalize + defaults
+    server_type_raw: "{{ spec.type | default('nginx') }}"
+    server_type: "{{ (spec.type | default('nginx')) | lower | trim }}"
+    replicas: "{{ (spec.replicas | default(1)) | int }}"
+    port: "{{ (spec.port | default(8080)) | int }}"
 
-    # Toggle to reduce noise if needed (set to false later)
-    debug_enabled: true
+    nginx_image_default:  "docker.io/library/nginx:1.27-alpine"
+    apache_image_default: "docker.io/library/httpd:2.4-alpine"
 
   tasks:
-    #################################################################
-    # Detect delete vs normal reconcile
-    #################################################################
-    - name: Detect if WebServer CR is being deleted
-      set_fact:
-        being_deleted: >-
-          {{ ansible_operator_meta.deletion_timestamp is defined
-             and (ansible_operator_meta.deletion_timestamp | string | length) > 0 }}
+    - name: Validate server_type
+      fail:
+        msg: "Unsupported spec.type='{{ server_type_raw }}' (normalized='{{ server_type }}'). Use nginx, apache, or httpd."
+      when: server_type not in ['nginx', 'apache', 'httpd']
 
-    #################################################################
-    # Labels (create/update only)
-    #################################################################
-    - name: Set labels (create/update only)
+    - name: Pick image based on type (allow spec.image override)
+      set_fact:
+        container_image: >-
+          {{ (spec.image | default('') | string | trim | length > 0)
+             | ternary(spec.image | string | trim,
+                       (apache_image_default if server_type in ['apache','httpd'] else nginx_image_default)) }}
+
+    - name: Set labels
       set_fact:
         labels:
           app.kubernetes.io/name: "{{ webserver_name }}"
           app.kubernetes.io/instance: "{{ webserver_name }}"
           app.kubernetes.io/managed-by: "webserver-operator"
           app: "{{ webserver_name }}"
-      when: not being_deleted
+
+    - name: Set probe path
+      set_fact:
+        probe_path: "{{ '/healthz' if server_type in ['apache','httpd'] else '/' }}"
+        container_name: "{{ 'apache' if server_type in ['apache','httpd'] else 'nginx' }}"
 
     #################################################################
-    # DELETE PATH (optional)
-    # If you rely on ownerReferences, you can omit this.
+    # Apache webroot (fix 403 on / + reliable health endpoint)
     #################################################################
-    - block:
-        - name: DEBUG - delete path hit
-          debug:
-            msg:
-              - "Delete reconcile for {{ webserver_name }}/{{ webserver_ns }} (deletionTimestamp={{ ansible_operator_meta.deletion_timestamp | default('') }})"
-          when: debug_enabled | bool
-
-        # If you want explicit deletes, uncomment these:
-        # - name: Delete Route
-        #   k8s:
-        #     state: absent
-        #     api_version: route.openshift.io/v1
-        #     kind: Route
-        #     namespace: "{{ webserver_ns }}"
-        #     name: "{{ webserver_name }}"
-        #
-        # - name: Delete Service
-        #   k8s:
-        #     state: absent
-        #     api_version: v1
-        #     kind: Service
-        #     namespace: "{{ webserver_ns }}"
-        #     name: "{{ webserver_name }}"
-        #
-        # - name: Delete Deployment
-        #   k8s:
-        #     state: absent
-        #     api_version: apps/v1
-        #     kind: Deployment
-        #     namespace: "{{ webserver_ns }}"
-        #     name: "{{ webserver_name }}"
-      when: being_deleted
-
-    #################################################################
-    # CREATE / UPDATE PATH
-    #################################################################
-    - block:
-        #################################################################
-        # Read the WebServer CR directly from the API (authoritative)
-        # Retry because SNO/API flaps can make k8s_info return empty.
-        #################################################################
-        - name: Read the WebServer CR from the API (authoritative, with retries)
-          k8s_info:
-            api_version: example.com/v1alpha1
-            kind: WebServer
+    - name: Ensure Apache webroot ConfigMap exists (index.html + healthz)
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ webserver_name }}-webroot"
             namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+          data:
+            index.html: |
+              <!doctype html>
+              <html>
+                <head><meta charset="utf-8" /><title>{{ webserver_name }}</title></head>
+                <body>
+                  <h1>{{ webserver_name }}</h1>
+                  <p>Deployed by webserver-operator ({{ operator_version }}).</p>
+                </body>
+              </html>
+            healthz: "ok\n"
+      when: server_type in ['apache','httpd']
+
+    #################################################################
+    # Deployment
+    #################################################################
+    - name: Ensure Deployment exists for selected web server
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
             name: "{{ webserver_name }}"
-          register: ws_cr
-          retries: "{{ cr_read_retries }}"
-          delay: "{{ cr_read_delay }}"
-          until: (ws_cr.resources | default([]) | length) > 0
-
-        - name: Fail if CR could not be read (after retries)
-          fail:
-            msg: >-
-              Unable to read WebServer {{ webserver_name }} in namespace {{ webserver_ns }}
-              after {{ cr_read_retries }} retries (delay={{ cr_read_delay }}s).
-              ws_cr.resources={{ ws_cr.resources | default([]) }}
-          when: (ws_cr.resources | default([]) | length) == 0
-
-        - name: Capture CR metadata needed for ownerReferences
-          set_fact:
-            cr_uid: "{{ ws_cr.resources[0].metadata.uid }}"
-            cr_api_version: "{{ ws_cr.resources[0].apiVersion }}"
-            cr_kind: "{{ ws_cr.resources[0].kind }}"
-            cr_generation: "{{ ws_cr.resources[0].metadata.generation | default('') }}"
-            cr_resource_version: "{{ ws_cr.resources[0].metadata.resourceVersion | default('') }}"
-
-        - name: Extract spec from CR (authoritative)
-          set_fact:
-            spec_obj: "{{ ws_cr.resources[0].spec | default({}) }}"
-
-        #################################################################
-        # DEEP DEBUG: dump raw CR + spec shape
-        #################################################################
-        - name: DEBUG - raw CR object summary (authoritative)
-          debug:
-            msg:
-              - "ws_cr.resources length={{ ws_cr.resources | default([]) | length }}"
-              - "apiVersion={{ ws_cr.resources[0].apiVersion | default('') }}"
-              - "kind={{ ws_cr.resources[0].kind | default('') }}"
-              - "name={{ ws_cr.resources[0].metadata.name | default('') }}"
-              - "namespace={{ ws_cr.resources[0].metadata.namespace | default('') }}"
-              - "uid={{ ws_cr.resources[0].metadata.uid | default('') }}"
-              - "generation={{ cr_generation }}"
-              - "resourceVersion={{ cr_resource_version }}"
-              - "deletionTimestamp={{ ws_cr.resources[0].metadata.deletionTimestamp | default('') }}"
-              - "spec={{ spec_obj }}"
-              - "spec keys={{ (spec_obj.keys() | list) if (spec_obj is mapping) else 'NOT_A_MAPPING' }}"
-          when: debug_enabled | bool
-
-        - name: Normalize server type + other spec values (safe dict access)
-          set_fact:
-            server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
-            server_type: "{{ (spec_obj.get('type', 'nginx')) | string | lower | trim }}"
-            replicas: "{{ spec_obj.get('replicas', 1) }}"
-            container_port: "{{ spec_obj.get('port', 8080) }}"
-
-        - name: DEBUG - normalized values
-          debug:
-            msg:
-              - "spec.type raw={{ server_type_raw }}"
-              - "server_type normalized={{ server_type }}"
-              - "replicas={{ replicas }}"
-              - "container_port={{ container_port }}"
-          when: debug_enabled | bool
-
-        - name: Validate server_type is supported (do not silently fall back)
-          fail:
-            msg: >-
-              Unsupported spec.type='{{ server_type_raw }}' (normalized='{{ server_type }}').
-              Must be one of: nginx, apache, httpd
-          when: server_type not in ['nginx', 'apache', 'httpd']
-
-        #################################################################
-        # Compute desired container image/name
-        #################################################################
-        - name: Determine default image + container name for server type
-          set_fact:
-            default_image: "{{ apache_image_default if server_type in ['apache','httpd'] else nginx_image_default }}"
-            container_name: "{{ 'apache' if server_type in ['apache','httpd'] else 'nginx' }}"
-
-        - name: Pick final container image (allow explicit override via spec.image)
-          set_fact:
-            container_image: >-
-              {{ (spec_obj.get('image', '') | string | trim | length > 0)
-                 | ternary(spec_obj.get('image', '') | string | trim, default_image) }}
-
-        - name: DEBUG - computed desired container values
-          debug:
-            msg:
-              - "desired container_name={{ container_name }}"
-              - "desired container_image={{ container_image }}"
-          when: debug_enabled | bool
-
-        #################################################################
-        # FIX: Apache index/probe failures
-        # - Provide a minimal webroot (index.html + healthz) for apache/httpd
-        # - Probe /healthz (200) instead of / (which could be 403 if no index)
-        #################################################################
-        - name: Ensure Apache webroot ConfigMap exists (index.html + healthz)
-          k8s:
-            state: present
-            definition:
-              apiVersion: v1
-              kind: ConfigMap
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          spec:
+            replicas: "{{ replicas }}"
+            selector:
+              matchLabels:
+                app: "{{ webserver_name }}"
+            template:
               metadata:
-                name: "{{ webserver_name }}-webroot"
-                namespace: "{{ webserver_ns }}"
                 labels: "{{ labels }}"
-                ownerReferences:
-                  - apiVersion: "{{ cr_api_version }}"
-                    kind: "{{ cr_kind }}"
-                    name: "{{ webserver_name }}"
-                    uid: "{{ cr_uid }}"
-                    controller: true
-                    blockOwnerDeletion: true
-              data:
-                index.html: |
-                  <!doctype html>
-                  <html>
-                    <head>
-                      <meta charset="utf-8" />
-                      <title>{{ webserver_name }}</title>
-                    </head>
-                    <body>
-                      <h1>{{ webserver_name }}</h1>
-                      <p>Deployed by webserver-operator.</p>
-                    </body>
-                  </html>
-                healthz: "ok\n"
-          when: server_type in ['apache', 'httpd']
-
-        #################################################################
-        # Build Deployment via YAML + from_yaml (ensures ints, not strings)
-        #################################################################
-        - name: Build Deployment manifest as YAML
-          set_fact:
-            deployment_manifest_yaml: |
-              apiVersion: apps/v1
-              kind: Deployment
-              metadata:
-                name: {{ webserver_name }}
-                namespace: {{ webserver_ns }}
-                labels: {{ labels | to_json }}
-                ownerReferences:
-                  - apiVersion: {{ cr_api_version }}
-                    kind: {{ cr_kind }}
-                    name: {{ webserver_name }}
-                    uid: {{ cr_uid }}
-                    controller: true
-                    blockOwnerDeletion: true
+                annotations:
+                  webserver-operator/version: "{{ operator_version }}"
               spec:
-                replicas: {{ replicas | int }}
-                selector:
-                  matchLabels:
-                    app: {{ webserver_name }}
-                template:
-                  metadata:
-                    labels: {{ labels | to_json }}
-                  spec:
-                    {% if server_type in ['apache','httpd'] %}
-                    volumes:
-                      - name: webroot
-                        configMap:
-                          name: {{ webserver_name }}-webroot
-                    {% endif %}
-                    containers:
-                      - name: {{ container_name }}
-                        image: {{ container_image }}
-                        ports:
-                          - name: http
-                            containerPort: {{ container_port | int }}
-                        {% if server_type in ['apache','httpd'] %}
-                        volumeMounts:
-                          - name: webroot
-                            mountPath: /var/www/html
-                            readOnly: true
-                        {% endif %}
-                        readinessProbe:
-                          httpGet:
-                            path: {{ '/healthz' if server_type in ['apache','httpd'] else '/' }}
-                            port: http
-                          initialDelaySeconds: 5
-                          periodSeconds: 10
-                        livenessProbe:
-                          httpGet:
-                            path: {{ '/healthz' if server_type in ['apache','httpd'] else '/' }}
-                            port: http
-                          initialDelaySeconds: 10
-                          periodSeconds: 20
+                volumes: >-
+                  {{ (server_type in ['apache','httpd'])
+                     | ternary(
+                         [ { 'name': 'webroot', 'configMap': { 'name': webserver_name ~ '-webroot' } } ],
+                         omit
+                       )
+                  }}
+                containers:
+                  - name: "{{ container_name }}"
+                    image: "{{ container_image }}"
+                    ports:
+                      - name: http
+                        containerPort: "{{ port }}"
+                    volumeMounts: >-
+                      {{ (server_type in ['apache','httpd'])
+                         | ternary(
+                             [ { 'name': 'webroot', 'mountPath': '/usr/local/apache2/htdocs', 'readOnly': true } ],
+                             omit
+                           )
+                      }}
+                    readinessProbe:
+                      httpGet:
+                        path: "{{ probe_path }}"
+                        port: http
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    livenessProbe:
+                      httpGet:
+                        path: "{{ probe_path }}"
+                        port: http
+                      initialDelaySeconds: 10
+                      periodSeconds: 20
 
-        - name: Parse Deployment YAML into dict
-          set_fact:
-            deployment_definition: "{{ deployment_manifest_yaml | from_yaml }}"
-
-        - name: DEBUG - deployment intent
-          debug:
-            msg:
-              - "Applying Deployment={{ webserver_name }} ns={{ webserver_ns }}"
-              - "container_name={{ container_name }}"
-              - "container_image={{ container_image }}"
-              - "replicas={{ replicas | int }}"
-              - "container_port={{ container_port | int }}"
-              - "probe_path={{ '/healthz' if server_type in ['apache','httpd'] else '/' }}"
-          when: debug_enabled | bool
-
-        - name: Ensure Deployment exists for selected web server (force apply)
-          k8s:
-            state: present
-            definition: "{{ deployment_definition }}"
-            force: true
-
-        - name: Read back Deployment after apply (confirm result)
-          k8s_info:
-            api_version: apps/v1
-            kind: Deployment
-            namespace: "{{ webserver_ns }}"
+    #################################################################
+    # Service
+    #################################################################
+    - name: Ensure Service exists
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
             name: "{{ webserver_name }}"
-          register: dep_after
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          spec:
+            selector:
+              app: "{{ webserver_name }}"
+            ports:
+              - name: http
+                port: 80
+                targetPort: http
+                protocol: TCP
 
-        - name: DEBUG - deployment actual state after apply
-          debug:
-            msg:
-              - "dep found={{ dep_after.resources | default([]) | length }}"
-              - "dep container name={{ dep_after.resources[0].spec.template.spec.containers[0].name | default('') }}"
-              - "dep container image={{ dep_after.resources[0].spec.template.spec.containers[0].image | default('') }}"
-              - "dep observedGeneration={{ dep_after.resources[0].status.observedGeneration | default('') }}"
-              - "dep generation={{ dep_after.resources[0].metadata.generation | default('') }}"
-          when:
-            - debug_enabled | bool
-            - (dep_after.resources | default([]) | length) > 0
-
-        #################################################################
-        # Ensure Service exists
-        #################################################################
-        - name: Ensure Service exists
-          k8s:
-            state: present
-            definition:
-              apiVersion: v1
+    #################################################################
+    # Route (OpenShift)
+    #################################################################
+    - name: Ensure Route exists
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: route.openshift.io/v1
+          kind: Route
+          metadata:
+            name: "{{ webserver_name }}"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          spec:
+            to:
               kind: Service
-              metadata:
-                name: "{{ webserver_name }}"
-                namespace: "{{ webserver_ns }}"
-                labels: "{{ labels }}"
-                ownerReferences:
-                  - apiVersion: "{{ cr_api_version }}"
-                    kind: "{{ cr_kind }}"
-                    name: "{{ webserver_name }}"
-                    uid: "{{ cr_uid }}"
-                    controller: true
-                    blockOwnerDeletion: true
-              spec:
-                selector:
-                  app: "{{ webserver_name }}"
-                ports:
-                  - name: http
-                    port: 80
-                    targetPort: http
-                    protocol: TCP
+              name: "{{ webserver_name }}"
+            port:
+              targetPort: http
+            tls:
+              termination: edge
 
-        - name: Read back Service after apply (confirm selector)
-          k8s_info:
-            api_version: v1
-            kind: Service
-            namespace: "{{ webserver_ns }}"
-            name: "{{ webserver_name }}"
-          register: svc_after
+    #################################################################
+    # Update CR status
+    #################################################################
+    - name: Set status to Ready
+      operator_sdk.util.k8s_status:
+        api_version: example.com/v1alpha1
+        kind: WebServer
+        name: "{{ webserver_name }}"
+        namespace: "{{ webserver_ns }}"
+        status:
+          phase: Ready
+          operatorVersion: "{{ operator_version }}"
+          message: "Operator {{ operator_version }} deployed {{ container_name }} with {{ replicas }} replica(s) on port {{ port }}"
 
-        - name: DEBUG - service actual state
-          debug:
-            msg:
-              - "svc found={{ svc_after.resources | default([]) | length }}"
-              - "svc selector={{ svc_after.resources[0].spec.selector | default({}) }}"
-              - "svc ports={{ svc_after.resources[0].spec.ports | default([]) }}"
-          when:
-            - debug_enabled | bool
-            - (svc_after.resources | default([]) | length) > 0
-
-        #################################################################
-        # Ensure Route exists
-        #################################################################
-        - name: Ensure Route exists
-          k8s:
-            state: present
-            definition:
-              apiVersion: route.openshift.io/v1
-              kind: Route
-              metadata:
-                name: "{{ webserver_name }}"
-                namespace: "{{ webserver_ns }}"
-                labels: "{{ labels }}"
-                ownerReferences:
-                  - apiVersion: "{{ cr_api_version }}"
-                    kind: "{{ cr_kind }}"
-                    name: "{{ webserver_name }}"
-                    uid: "{{ cr_uid }}"
-                    controller: true
-                    blockOwnerDeletion: true
-              spec:
-                to:
-                  kind: Service
-                  name: "{{ webserver_name }}"
-                port:
-                  targetPort: http
-                tls:
-                  termination: edge
-
-        - name: Read back Route after apply (confirm)
-          k8s_info:
-            api_version: route.openshift.io/v1
-            kind: Route
-            namespace: "{{ webserver_ns }}"
-            name: "{{ webserver_name }}"
-          register: route_after
-
-        - name: DEBUG - route actual state
-          debug:
-            msg:
-              - "route found={{ route_after.resources | default([]) | length }}"
-              - "route to.service={{ route_after.resources[0].spec.to.name | default('') }}"
-              - "route targetPort={{ route_after.resources[0].spec.port.targetPort | default('') }}"
-              - "route tls.termination={{ route_after.resources[0].spec.tls.termination | default('') }}"
-          when:
-            - debug_enabled | bool
-            - (route_after.resources | default([]) | length) > 0
-
-        #################################################################
-        # Update status
-        #################################################################
-        - name: Set status to Ready
-          operator_sdk.util.k8s_status:
-            api_version: example.com/v1alpha1
-            kind: WebServer
-            name: "{{ webserver_name }}"
-            namespace: "{{ webserver_ns }}"
-            status:
-              phase: Ready
-              message: >-
-                Deployed {{ container_name }} using image {{ container_image }}
-                with {{ replicas | int }} replica(s) on port {{ container_port | int }}
-
-      when: not being_deleted
+    #################################################################
+    # Final version banner (log signal)
+    #################################################################
+    - name: VERSION BANNER - operator version running
+      debug:
+        msg:
+          - "============================================================"
+          - "webserver-operator version: {{ operator_version }}"
+          - "CR: {{ webserver_ns }}/{{ webserver_name }}"
+          - "server_type={{ server_type }} image={{ container_image }}"
+          - "replicas={{ replicas }} port={{ port }} probe_path={{ probe_path }}"
+          - "============================================================"
