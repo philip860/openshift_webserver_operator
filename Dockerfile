@@ -1,29 +1,11 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator (Ansible Operator) - CVE-aware builds + RunAsNonRoot safe
-#
-# This file is written to be compatible with stricter/older builders:
-#  - FIRST non-comment directive is a FROM (no ARG before FROM)
-#  - Stage-local ARGs are redeclared where needed
-#
-# Targets:
-#   - basepatched : patch official ose-ansible-rhel9-operator in-place
-#   - rebased     : patch UBI9 first, then copy operator runtime bits
-#   - final       : defaults to basepatched (non-root), for "podman build ." usage
-#
-# Build:
-#   podman build --target basepatched -t quay.io/philip860/webserver-operator:v1.0.35-basepatched .
-#   podman build --target rebased     -t quay.io/philip860/webserver-operator:v1.0.35-rebased .
-#   podman build                     -t quay.io/philip860/webserver-operator:v1.0.35 .
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Stage 0: official operator base (source of runtime bits for rebased)
-# NOTE: We intentionally pin this digest for reproducibility.
 # -----------------------------------------------------------------------------
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:440d3e4711ebd68f14e1e1575b757db4d202850070f0f634dc5c6cab89d02e7b AS operator-src
-
-# If you ever want to override the base image, do it by editing the FROM above,
-# or by maintaining a separate Dockerfile.<variant> for build reproducibility.
 
 # -----------------------------------------------------------------------------
 # Stage 1: basepatched (patch in-place on the official base)
@@ -33,6 +15,30 @@ FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:440d3e4711e
 USER 0
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
+
+# Enable required repos (CRB/CodeReady Builder + EPEL) best-effort
+RUN set -eux; \
+    dnf -y install dnf-plugins-core ca-certificates curl || true; \
+    \
+    echo "=== Enabling CodeReady Builder / CRB (best-effort) ==="; \
+    if command -v subscription-manager >/dev/null 2>&1; then \
+      # RHEL path (requires entitlement)
+      subscription-manager repos --enable "codeready-builder-for-rhel-9-$(arch)-rpms" || true; \
+    fi; \
+    # UBI path (repo name sometimes exists even without subscription-manager)
+    dnf config-manager --set-enabled ubi-9-codeready-builder-rpms 2>/dev/null || true; \
+    # Rocky/Alma/Oracle/CentOS Stream style
+    dnf config-manager --set-enabled crb 2>/dev/null || true; \
+    \
+    echo "=== Enabling EPEL (best-effort) ==="; \
+    # If epel-release is available in configured repos, use it; otherwise try direct RPM.
+    dnf -y install epel-release 2>/dev/null || \
+      dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm 2>/dev/null || true; \
+    \
+    echo "=== Enabled repos (debug) ==="; \
+    dnf repolist || true; \
+    dnf -y clean all; \
+    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # (A) ONLINE PATCHING
 RUN set -eux; \
@@ -84,7 +90,7 @@ RUN set -eux; \
     rpm -q libxml2 sqlite-libs krb5-libs pam python3 python3-libs libarchive expat 2>/dev/null || true
 
 # REQUIRED CERTIFICATION LABELS (edit values to match your project)
-LABEL name="webserver-operator-dev" \
+LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
       version="1.0.35" \
@@ -121,7 +127,6 @@ ENV ANSIBLE_USER_ID=1001
 
 # -----------------------------------------------------------------------------
 # Stage 2: rebased (patch UBI first, then copy ONLY operator/runtime bits)
-# NOTE: This stage is optional; build it with --target rebased.
 # -----------------------------------------------------------------------------
 FROM registry.access.redhat.com/ubi9/ubi:latest AS rebased
 
@@ -129,7 +134,27 @@ USER 0
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# Patch UBI FIRST (do NOT overwrite dnf/libdnf by copying /usr/bin, /usr/lib64, /lib64, /etc wholesale)
+# Enable required repos (UBI CodeReady Builder + EPEL) best-effort
+RUN set -eux; \
+    dnf -y install dnf-plugins-core ca-certificates curl yum || true; \
+    \
+    echo "=== Enabling CodeReady Builder / CRB (best-effort) ==="; \
+    if command -v subscription-manager >/dev/null 2>&1; then \
+      subscription-manager repos --enable "codeready-builder-for-rhel-9-$(arch)-rpms" || true; \
+    fi; \
+    dnf config-manager --set-enabled ubi-9-codeready-builder-rpms 2>/dev/null || true; \
+    dnf config-manager --set-enabled crb 2>/dev/null || true; \
+    \
+    echo "=== Enabling EPEL (best-effort) ==="; \
+    dnf -y install epel-release 2>/dev/null || \
+      dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm 2>/dev/null || true; \
+    \
+    echo "=== Enabled repos (debug) ==="; \
+    dnf repolist || true; \
+    dnf -y clean all; \
+    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
+# Patch UBI FIRST
 RUN set -eux; \
     dnf -y makecache --refresh; \
     dnf -y update --refresh; \
@@ -217,11 +242,7 @@ ENV ANSIBLE_USER_ID=1001
 
 # -----------------------------------------------------------------------------
 # Stage 3: final (default output of "podman build .")
-# This is a simple alias stage so "podman build ." always produces a non-root image.
-# By default we publish basepatched behavior.
 # -----------------------------------------------------------------------------
 FROM basepatched AS final
-
-# absolutely ensure non-root in final image config (last USER wins)
 USER 1001
 ENV ANSIBLE_USER_ID=1001
