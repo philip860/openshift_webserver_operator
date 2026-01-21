@@ -18,27 +18,17 @@ WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
 # Enable required repos (CRB/CodeReady Builder + EPEL) best-effort
 RUN set -eux; \
-    dnf -y install dnf-plugins-core ca-certificates curl || true; \
-    \
+    dnf -y install dnf-plugins-core ca-certificates || true; \
     echo "=== Enabling CodeReady Builder / CRB (best-effort) ==="; \
-    if command -v subscription-manager >/dev/null 2>&1; then \
-      # RHEL path (requires entitlement)
-      subscription-manager repos --enable "codeready-builder-for-rhel-9-$(arch)-rpms" || true; \
-    fi; \
-    # UBI path (repo name sometimes exists even without subscription-manager)
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms 2>/dev/null || true; \
-    # Rocky/Alma/Oracle/CentOS Stream style
     dnf config-manager --set-enabled crb 2>/dev/null || true; \
-    \
     echo "=== Enabling EPEL (best-effort) ==="; \
-    # If epel-release is available in configured repos, use it; otherwise try direct RPM.
-    dnf -y install epel-release 2>/dev/null || \
-      dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm 2>/dev/null || true; \
-    \
+    dnf -y install epel-release 2>/dev/null || true; \
     echo "=== Enabled repos (debug) ==="; \
     dnf repolist || true; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
 
 # (A) ONLINE PATCHING
 RUN set -eux; \
