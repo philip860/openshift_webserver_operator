@@ -1,30 +1,24 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator - Rebased UBI9 + Preserve official runner/ansible behavior
 #
-# Goal:
-# - Pass Red Hat scan (UBI base + errata)
-# - Mirror official ose-ansible-rhel9-operator runtime behavior so runner events
-#   (including playbook_on_stats) work exactly like the base image.
-# - Avoid pip-installing ansible-runner (layout/codec issues) and avoid heredocs.
-#
 # Fixes included:
-# - ansible-runner CLI present AND verified only after ansible_runner module exists
-# - ansible-playbook present (install ansible-core from UBI RPMs)
-# - robust site-packages selection (find dir that actually contains ansible + ansible_runner)
-# - required python deps installed in ONE pip transaction; pip check included
-# - avoid touching /usr/share/ansible when it doesn't exist
+# - ansible-playbook exists (dnf install ansible-core)
+# - kubernetes/openshift python libs installed for the SAME interpreter ansible uses (/usr/bin/python3)
+# - ansible-runner executable exists in PATH AND its python module is installed for /usr/bin/python3
+# - runner callback plugin copied into a standard callback_plugins path
+# - avoid copying /usr/share/ansible when it doesn't exist in operator-src
+# - avoid dnf module usage (UBI images may not ship module metadata)
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
-# Stage 0: official operator image (known-good ansible-runner + callbacks + config)
+# Stage 0: official operator image (known-good operator runtime bits under /opt, config under /etc/ansible)
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
 # Stage 1: rebased UBI image we publish
 FROM registry.access.redhat.com/ubi9/ubi:latest AS final
 
 USER 0
-
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
@@ -36,10 +30,9 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
 # -----------------------------------------------------------------------------
-# 2) Enable UBI repos + install Python runtime
-#    NOTE: UBI containers may not provide dnf modules; do NOT use `dnf module`.
-#    Create stable /usr/local/bin/python3 + pip3 pointing at what we have.
-#    ALSO: install ansible-core so ansible-playbook exists (runner exec requirement).
+# 2) Enable UBI repos + install REQUIRED runtime:
+#    - python3 + pip (this is /usr/bin/python3, which ansible-core uses)
+#    - ansible-core (provides /usr/bin/ansible-playbook)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum findutils which tar gzip shadow-utils; \
@@ -48,19 +41,12 @@ RUN set -eux; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y makecache --refresh; \
     \
-    if dnf -y install python3.12 python3.12-pip python3.12-setuptools python3.12-wheel; then \
-      ln -sf /usr/bin/python3.12 /usr/local/bin/python3; \
-      ln -sf /usr/bin/pip3.12 /usr/local/bin/pip3 || true; \
-    else \
-      echo "WARN: python3.12 not available in enabled UBI repos; falling back to python3"; \
-      dnf -y install python3 python3-pip python3-setuptools python3-wheel; \
-      ln -sf /usr/bin/python3 /usr/local/bin/python3; \
-      ln -sf /usr/bin/pip3 /usr/local/bin/pip3 || true; \
-    fi; \
-    /usr/local/bin/python3 -V; \
-    /usr/local/bin/python3 -m pip --version; \
+    # System Python (this is what ansible-core will run under)
+    dnf -y install python3 python3-pip python3-setuptools python3-wheel; \
+    /usr/bin/python3 -V; \
+    /usr/bin/python3 -m pip --version; \
     \
-    # REQUIRED: provide ansible-playbook/ansible-galaxy executables (runner needs ansible-playbook)
+    # Ansible CLI (ansible-playbook must exist)
     dnf -y install ansible-core; \
     command -v ansible-playbook; \
     ansible-playbook --version; \
@@ -68,10 +54,8 @@ RUN set -eux; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# Silence pip "root" warnings during image builds
+# Silence pip warnings in container builds
 ENV PIP_ROOT_USER_ACTION=ignore
-
-# Ensure the usual bin dirs are present in PATH
 ENV PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 # -----------------------------------------------------------------------------
@@ -94,31 +78,21 @@ RUN set -eux; \
       /etc/ansible \
       /licenses \
       ${ANSIBLE_OPERATOR_DIR} \
-      /usr/local/bin
+      /usr/local/bin \
+      /usr/share/ansible/plugins/callback
 
 # -----------------------------------------------------------------------------
-# 5) Copy operator runtime bits (under /opt) from official base
+# 5) Copy operator runtime bits (under /opt) and ansible config from official base
 # -----------------------------------------------------------------------------
 COPY --from=operator-src /opt/ /opt/
-
-# -----------------------------------------------------------------------------
-# 6) Bring in known-good configs + runner bits from operator-src
-# -----------------------------------------------------------------------------
 COPY --from=operator-src /etc/ansible/ /etc/ansible/
-# NOTE: operator-src does NOT always ship /usr/share/ansible, so do not copy it.
-# COPY --from=operator-src /usr/share/ansible/ /usr/share/ansible/
 
-# Stash operator-src content under /tmp so we can extract only what we need
+# Stash operator-src bins under /tmp so we can extract the operator binaries
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
-COPY --from=operator-src /usr/local/lib/ /tmp/operator-src/usr-local-lib/
-COPY --from=operator-src /usr/local/lib64/ /tmp/operator-src/usr-local-lib64/
-# Often needed for RPM-installed python libs in operator-src
-COPY --from=operator-src /usr/lib/ /tmp/operator-src/usr-lib/
-COPY --from=operator-src /usr/lib64/ /tmp/operator-src/usr-lib64/
 
 # -----------------------------------------------------------------------------
-# 7) Install ansible-operator binary from operator-src (robust)
+# 6) Install ansible-operator binary from operator-src (robust)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     if [ -x /tmp/operator-src/usr-local-bin/ansible-operator ]; then \
@@ -134,8 +108,8 @@ RUN set -eux; \
     /usr/local/bin/ansible-operator version
 
 # -----------------------------------------------------------------------------
-# 7b) Install ansible-runner CLI from operator-src so the operator can exec it
-#     IMPORTANT: Do NOT run it here (ansible_runner python module isn't present yet).
+# 7) Install ansible-runner CLI from operator-src so the operator can exec it
+#    NOTE: do NOT run it yet; we'll install python module next.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     if [ -x /tmp/operator-src/usr-local-bin/ansible-runner ]; then \
@@ -148,48 +122,18 @@ RUN set -eux; \
       ls -la /tmp/operator-src/usr-bin || true; \
       exit 1; \
     fi; \
-    chmod 0755 /usr/local/bin/ansible-runner; \
-    head -n 5 /usr/local/bin/ansible-runner || true
+    chmod 0755 /usr/local/bin/ansible-runner
 
 # -----------------------------------------------------------------------------
-# 8) Copy the site-packages for ansible + ansible_runner from operator-src
-#    into this rebased image’s current python3 site-packages.
-#
-#    FIXES:
-#    - Choose the site-packages directory that actually contains ansible + runner
-#    - Install missing deps required by copied stack (pexpect, PyYAML, python-daemon, etc.)
-#    - Verify ansible-runner CLI AFTER modules exist
+# 8) Install python deps for *system python* (/usr/bin/python3)
+#    This fixes: "Failed to import kubernetes ... Python /usr/bin/python3"
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    DEST_SITEPKG="$("/usr/local/bin/python3" -c 'import site; print(site.getsitepackages()[0])')"; \
-    echo "DEST_SITEPKG=${DEST_SITEPKG}"; \
-    mkdir -p "${DEST_SITEPKG}"; \
-    \
-    SRC_SITEPKG="$( \
-      find /tmp/operator-src -type d -name site-packages -print 2>/dev/null \
-      | while read -r d; do \
-          if [ -d "$d/ansible" ] && [ -d "$d/ansible_runner" ]; then echo "$d"; break; fi; \
-        done \
-    )"; \
-    if [ -z "$SRC_SITEPKG" ]; then \
-      echo "ERROR: could not find site-packages containing ansible + ansible_runner in operator-src"; \
-      echo "DEBUG: candidate site-packages dirs:"; \
-      find /tmp/operator-src -type d -name site-packages -print | head -n 200 || true; \
-      echo "DEBUG: searching for ansible modules:"; \
-      find /tmp/operator-src -maxdepth 12 -type d -name ansible -o -name ansible_runner | head -n 200 || true; \
-      exit 1; \
-    fi; \
-    echo "Using SRC_SITEPKG=${SRC_SITEPKG}"; \
-    \
-    cp -a "${SRC_SITEPKG}/ansible" "${DEST_SITEPKG}/"; \
-    cp -a "${SRC_SITEPKG}/ansible_runner" "${DEST_SITEPKG}/"; \
-    \
-    cp -a "${SRC_SITEPKG}"/ansible-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
-    cp -a "${SRC_SITEPKG}"/ansible_runner-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
-    \
-    # Upgrade pip tooling + install deps in ONE transaction (avoids resolver warning noise)
-    /usr/local/bin/python3 -m pip install --no-cache-dir --upgrade \
+    /usr/bin/python3 -m pip install --no-cache-dir --upgrade \
       pip setuptools wheel \
+      "ansible-runner==2.4.1" \
+      "kubernetes>=24.2.0" \
+      "openshift>=0.13.2" \
       "pexpect>=4.8.0" \
       "ptyprocess>=0.7.0" \
       "PyYAML>=6.0" \
@@ -200,21 +144,40 @@ RUN set -eux; \
       "resolvelib" \
       "cryptography"; \
     \
-    /usr/local/bin/python3 -m pip check; \
-    /usr/local/bin/python3 -c "import pexpect, ptyprocess, yaml, daemon, lockfile, jinja2, packaging, resolvelib, cryptography; print('OK deps')"; \
-    /usr/local/bin/python3 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"; \
-    /usr/local/bin/ansible-runner --version; \
-    command -v ansible-playbook; \
-    ansible-playbook --version
+    /usr/bin/python3 -m pip check; \
+    /usr/bin/python3 -c "import kubernetes, openshift; print('OK: k8s libs')"; \
+    /usr/bin/python3 -c "import ansible_runner; print('OK: ansible_runner', ansible_runner.__version__)"
 
 # -----------------------------------------------------------------------------
-# 9) Clean temp copies
+# 9) Make ansible-runner callback plugin discoverable (standard path)
+#    (ansible-runner package ships plugins/callback/)
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    /usr/bin/python3 -c 'import os, shutil, ansible_runner; \
+      src=os.path.join(os.path.dirname(ansible_runner.__file__), "plugins", "callback"); \
+      dst="/usr/share/ansible/plugins/callback"; \
+      os.makedirs(dst, exist_ok=True); \
+      [shutil.copy2(os.path.join(src,f), os.path.join(dst,f)) for f in os.listdir(src) if f.endswith(".py")]; \
+      print("Copied callbacks to", dst)'; \
+    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1)
+
+# -----------------------------------------------------------------------------
+# 10) Verify the exact runtime commands the operator needs
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    command -v ansible-playbook; \
+    command -v ansible-runner; \
+    ansible-playbook --version; \
+    /usr/local/bin/ansible-runner --version
+
+# -----------------------------------------------------------------------------
+# 11) Clean temp copies
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     rm -rf /tmp/operator-src
 
 # -----------------------------------------------------------------------------
-# 10) Environment: prefer our stable python path for localhost execution inside runner
+# 12) Environment
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -222,11 +185,10 @@ ENV HOME=/opt/ansible \
     ANSIBLE_COLLECTIONS_PATHS=/opt/ansible/.ansible/collections:/usr/share/ansible/collections \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
-    ANSIBLE_PYTHON_INTERPRETER=/usr/local/bin/python3 \
     PYTHONUNBUFFERED=1
 
 # -----------------------------------------------------------------------------
-# 11) Required certification labels + NOTICE
+# 13) Required certification labels + NOTICE
 # -----------------------------------------------------------------------------
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
@@ -241,10 +203,7 @@ RUN set -eux; \
     printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
 # -----------------------------------------------------------------------------
-# 12) Collections + operator content
-#    FIXES:
-#    - /usr/share/ansible often does not exist -> don't chgrp/chmod it
-#    - ansible-galaxy may not exist in this rebased layout -> warn and continue
+# 14) Collections + operator content
 # -----------------------------------------------------------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
@@ -257,19 +216,19 @@ RUN set -eux; \
       fi; \
     fi; \
     rm -f /tmp/requirements.yml; \
-    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible || true; \
-    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible || true
+    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible /usr/share/ansible || true; \
+    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible /usr/share/ansible || true
 
 COPY watches.yaml ${ANSIBLE_OPERATOR_DIR}/watches.yaml
 COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
 COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
 
 RUN set -eux; \
-    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true; \
-    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true
+    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible /usr/share/ansible || true; \
+    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible /usr/share/ansible || true
 
 # -----------------------------------------------------------------------------
-# 13) Entrypoint
+# 15) Entrypoint
 # -----------------------------------------------------------------------------
 RUN set -eux; \
   printf '%s\n' \
@@ -280,7 +239,7 @@ RUN set -eux; \
   chmod 0755 /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
-# 14) Run as OpenShift arbitrary UID (non-root)
+# 16) Run as OpenShift arbitrary UID (non-root)
 # -----------------------------------------------------------------------------
 USER 1001
 ENV ANSIBLE_USER_ID=1001
