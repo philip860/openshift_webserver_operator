@@ -1,12 +1,15 @@
 # -----------------------------------------------------------------------------
-# WebServer Operator (Ansible Operator) - Path B (Publish REBASED UBI image)
+# WebServer Operator (Ansible Operator) - Path B (Rebased UBI9 image)
 #
-# Fixes:
-# - Preserve operator runtime (entrypoint + ansible-operator)
-# - Do NOT use copied ansible-galaxy wrapper (it points to /usr/local/bin/python3)
-# - Use UBI's ansible-core (ansible-galaxy uses /usr/bin/python3)
-# - Avoid curl vs curl-minimal conflict (do NOT install curl)
-# - Remove redhat.repo to avoid repo mixing
+# Uses facts from operator base digest:
+# - /usr/local/bin/ansible-operator exists
+# - /usr/local/bin/entrypoint does NOT exist (so don't use it)
+#
+# Strategy:
+# - Copy /opt runtime bits from operator base
+# - Copy ONLY ansible-operator binary into /usr/local/bin
+# - Use UBI ansible-core + /usr/bin/python3 for ansible-galaxy
+# - Set ENTRYPOINT to ansible-operator (matches the “working” behavior)
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -26,14 +29,13 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# Install python + ansible-core from UBI (this provides a working ansible-galaxy)
+# Install python + ansible-core from UBI (working ansible-galaxy)
 # NOTE: Do NOT install curl (curl-minimal already present and conflicts)
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum python3 python3-setuptools ansible-core; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
-    dnf -y repolist; \
     /usr/bin/python3 --version; \
     ansible-galaxy --version; \
     dnf -y clean all; \
@@ -48,18 +50,18 @@ RUN set -eux; \
 
 # Create expected dirs
 RUN set -eux; \
-    mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator
+    mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator /usr/local/bin
 
-# Copy operator runtime bits from official base
+# Copy operator runtime bits from official base:
+# - /opt: operator SDK runtime + scaffolding
+# - ansible-operator binary only (avoid copying python/ansible wrappers from /usr/local/bin)
 COPY --from=operator-src /opt/ /opt/
-COPY --from=operator-src /usr/local/bin/ /usr/local/bin/
+COPY --from=operator-src /usr/local/bin/ansible-operator /usr/local/bin/ansible-operator
 
-# IMPORTANT: remove copied ansible wrappers that reference /usr/local/bin/python3
-# We want to use UBI's ansible-core ones in /usr/bin instead.
+# Quick verify the binary is present
 RUN set -eux; \
-    rm -f /usr/local/bin/ansible /usr/local/bin/ansible-playbook /usr/local/bin/ansible-galaxy /usr/local/bin/ansible-config || true; \
-    command -v ansible-galaxy; \
-    head -n1 "$(command -v ansible-galaxy)" || true
+    test -x /usr/local/bin/ansible-operator; \
+    /usr/local/bin/ansible-operator version
 
 # Certification labels
 LABEL name="webserver-operator-dev" \
@@ -100,9 +102,9 @@ RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin
 
-# Force operator entrypoint so container doesn't exit immediately
-ENTRYPOINT ["/usr/local/bin/entrypoint"]
-CMD ["/usr/local/bin/ansible-operator", "run", "--watches-file=/opt/ansible-operator/watches.yaml"]
-
 USER 1001
 ENV ANSIBLE_USER_ID=1001
+
+# Behave like the working operator image:
+ENTRYPOINT ["/usr/local/bin/ansible-operator"]
+CMD ["run", "--watches-file=/opt/ansible-operator/watches.yaml"]
