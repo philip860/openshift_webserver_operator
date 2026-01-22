@@ -29,7 +29,8 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
 # -----------------------------------------------------------------------------
-# 2) Enable UBI repos + install Python 3.12 runtime (do NOT pip ansible/runner)
+# 2) Enable UBI repos + install Python runtime
+#    NOTE: UBI containers may not provide dnf modules; do NOT use `dnf module`.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum findutils which tar gzip shadow-utils; \
@@ -38,15 +39,19 @@ RUN set -eux; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y makecache --refresh; \
     \
-    # Prefer the module stream so python3.12 actually resolves on all UBI9 minors
-    dnf -y module reset python || true; \
-    dnf -y module enable python:3.12; \
-    \
-    dnf -y install python3.12 python3.12-pip python3.12-setuptools python3.12-wheel; \
-    /usr/bin/python3.12 -V; \
-    /usr/bin/python3.12 -m pip --version; \
+    # Try Python 3.12 if the repos provide it; otherwise fall back to python3
+    if dnf -y install python3.12 python3.12-pip python3.12-setuptools python3.12-wheel; then \
+      PYBIN=/usr/bin/python3.12; \
+    else \
+      echo "WARN: python3.12 not available in enabled UBI repos; falling back to python3"; \
+      dnf -y install python3 python3-pip python3-setuptools python3-wheel; \
+      PYBIN=/usr/bin/python3; \
+    fi; \
+    "$PYBIN" -V; \
+    "$PYBIN" -m pip --version; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
 
 # -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
