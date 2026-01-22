@@ -31,6 +31,7 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 2) Enable UBI repos + install Python runtime
 #    NOTE: UBI containers may not provide dnf modules; do NOT use `dnf module`.
+#    Create stable /usr/local/bin/python3 + pip3 pointing at what we have.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum findutils which tar gzip shadow-utils; \
@@ -39,19 +40,19 @@ RUN set -eux; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y makecache --refresh; \
     \
-    # Try Python 3.12 if the repos provide it; otherwise fall back to python3
     if dnf -y install python3.12 python3.12-pip python3.12-setuptools python3.12-wheel; then \
-      PYBIN=/usr/bin/python3.12; \
+      ln -sf /usr/bin/python3.12 /usr/local/bin/python3; \
+      ln -sf /usr/bin/pip3.12 /usr/local/bin/pip3 || true; \
     else \
       echo "WARN: python3.12 not available in enabled UBI repos; falling back to python3"; \
       dnf -y install python3 python3-pip python3-setuptools python3-wheel; \
-      PYBIN=/usr/bin/python3; \
+      ln -sf /usr/bin/python3 /usr/local/bin/python3; \
+      ln -sf /usr/bin/pip3 /usr/local/bin/pip3 || true; \
     fi; \
-    "$PYBIN" -V; \
-    "$PYBIN" -m pip --version; \
+    /usr/local/bin/python3 -V; \
+    /usr/local/bin/python3 -m pip --version; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
-
 
 # -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
@@ -82,7 +83,6 @@ COPY --from=operator-src /opt/ /opt/
 
 # -----------------------------------------------------------------------------
 # 6) Bring in known-good configs + runner bits from operator-src
-#    (This is what keeps runner events working like the official image.)
 # -----------------------------------------------------------------------------
 COPY --from=operator-src /etc/ansible/ /etc/ansible/
 # NOTE: operator-src does NOT always ship /usr/share/ansible, so do not copy it.
@@ -109,27 +109,24 @@ RUN set -eux; \
     /usr/local/bin/ansible-operator version
 
 # -----------------------------------------------------------------------------
-# 8) Copy the *exact* Python 3.12 site-packages for ansible + ansible_runner
-#    from operator-src into this rebased image’s Python 3.12 site-packages.
+# 8) Copy the *exact* site-packages for ansible + ansible_runner from operator-src
+#    into this rebased image’s current python3 site-packages.
 #
-#    ALSO: install missing runtime deps required by the copied stack.
-#    Fix for: ModuleNotFoundError: No module named 'pexpect'
+#    IMPORTANT FIXES:
+#    - Do NOT hardcode python3.12 paths (may fall back to python3)
+#    - Do NOT hardcode operator-src python3.12 site-packages paths
+#    - Install missing deps required by copied stack (pexpect, PyYAML, python-daemon, etc.)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    DEST_SITEPKG="$("/usr/bin/python3.12" -c 'import site; print(site.getsitepackages()[0])')"; \
+    DEST_SITEPKG="$("/usr/local/bin/python3" -c 'import site; print(site.getsitepackages()[0])')"; \
     echo "DEST_SITEPKG=${DEST_SITEPKG}"; \
     mkdir -p "${DEST_SITEPKG}"; \
     \
-    SRC_SITEPKG=""; \
-    for d in \
-      /tmp/operator-src/usr-local-lib/python3.12/site-packages \
-      /tmp/operator-src/usr-local-lib64/python3.12/site-packages \
-    ; do \
-      if [ -d "$d" ]; then SRC_SITEPKG="$d"; break; fi; \
-    done; \
+    # Locate operator-src site-packages (python version may vary in the source image)
+    SRC_SITEPKG="$(find /tmp/operator-src -type d -path '*/site-packages' | head -n 1 || true)"; \
     if [ -z "$SRC_SITEPKG" ]; then \
-      echo "ERROR: could not find operator-src python3.12 site-packages under /usr/local/lib{,64}"; \
-      find /tmp/operator-src -maxdepth 8 -type d -name site-packages | head -n 200 || true; \
+      echo "ERROR: could not find operator-src site-packages under /tmp/operator-src"; \
+      find /tmp/operator-src -maxdepth 10 -type d -name site-packages | head -n 200 || true; \
       exit 1; \
     fi; \
     echo "Using SRC_SITEPKG=${SRC_SITEPKG}"; \
@@ -141,17 +138,9 @@ RUN set -eux; \
     cp -a "${SRC_SITEPKG}"/ansible-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     cp -a "${SRC_SITEPKG}"/ansible_runner-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     \
-    # ansible-runner on some builds expects importlib_metadata + zipp (py<3.10)
-    if [ -d "${SRC_SITEPKG}/importlib_metadata" ] && [ -d "${SRC_SITEPKG}/zipp" ]; then \
-      cp -a "${SRC_SITEPKG}/importlib_metadata" "${DEST_SITEPKG}/"; \
-      cp -a "${SRC_SITEPKG}/zipp" "${DEST_SITEPKG}/"; \
-      cp -a "${SRC_SITEPKG}"/importlib_metadata-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
-      cp -a "${SRC_SITEPKG}"/zipp-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
-    fi; \
-    \
-    # FIX: copied ansible stack expects extra runtime deps. Install into py3.12 site-packages.
-    /usr/bin/python3.12 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
-    /usr/bin/python3.12 -m pip install --no-cache-dir \
+    # extra deps: keep builds from failing with ModuleNotFoundError (yaml/pexpect/daemon/etc.)
+    /usr/local/bin/python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
+    /usr/local/bin/python3 -m pip install --no-cache-dir \
       "pexpect>=4.8.0" \
       "ptyprocess>=0.7.0" \
       "PyYAML>=6.0" \
@@ -162,9 +151,8 @@ RUN set -eux; \
       "resolvelib" \
       "cryptography"; \
     \
-    /usr/bin/python3.12 -c "import pexpect, ptyprocess, yaml, daemon, lockfile, jinja2, packaging, resolvelib, cryptography; print('OK deps')"; \
-    /usr/bin/python3.12 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"
-
+    /usr/local/bin/python3 -c "import pexpect, ptyprocess, yaml, daemon, lockfile, jinja2, packaging, resolvelib, cryptography; print('OK deps')"; \
+    /usr/local/bin/python3 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"
 
 # -----------------------------------------------------------------------------
 # 9) Clean temp copies
@@ -173,8 +161,7 @@ RUN set -eux; \
     rm -rf /tmp/operator-src
 
 # -----------------------------------------------------------------------------
-# 10) Environment: prefer python3.12 for localhost execution inside runner
-#     Do NOT force stdout_callback here; we keep operator-src’s configs/plugins.
+# 10) Environment: prefer our stable python path for localhost execution inside runner
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -182,7 +169,7 @@ ENV HOME=/opt/ansible \
     ANSIBLE_COLLECTIONS_PATHS=/opt/ansible/.ansible/collections:/usr/share/ansible/collections \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
-    ANSIBLE_PYTHON_INTERPRETER=/usr/bin/python3.12 \
+    ANSIBLE_PYTHON_INTERPRETER=/usr/local/bin/python3 \
     PYTHONUNBUFFERED=1 \
     PIP_ROOT_USER_ACTION=ignore
 
@@ -203,6 +190,9 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 12) Collections + operator content
+#    FIXES:
+#    - /usr/share/ansible often does not exist -> don't chgrp/chmod it
+#    - ansible-galaxy may not exist in this rebased layout -> warn and continue
 # -----------------------------------------------------------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
@@ -215,16 +205,16 @@ RUN set -eux; \
       fi; \
     fi; \
     rm -f /tmp/requirements.yml; \
-    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible /usr/share/ansible || true; \
-    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible /usr/share/ansible || true
+    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible || true; \
+    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible || true
 
 COPY watches.yaml ${ANSIBLE_OPERATOR_DIR}/watches.yaml
 COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
 COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
 
 RUN set -eux; \
-    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible /usr/share/ansible || true; \
-    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible /usr/share/ansible || true
+    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true; \
+    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true
 
 # -----------------------------------------------------------------------------
 # 13) Entrypoint
