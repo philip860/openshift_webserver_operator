@@ -60,9 +60,6 @@ ENV HOME=/opt/ansible \
     ANSIBLE_REMOTE_TEMP=/opt/ansible/.ansible/tmp \
     ANSIBLE_COLLECTIONS_PATHS=/opt/ansible/.ansible/collections:/usr/share/ansible/collections \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
-    ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
-    ANSIBLE_CALLBACK_PLUGINS=/usr/share/ansible/plugins/callback \
-    # ANSIBLE_STDOUT_CALLBACK=ansible_runner \
     ANSIBLE_NOCOLOR=1 \
     ANSIBLE_FORCE_COLOR=0 \
     TERM=dumb \
@@ -74,16 +71,13 @@ RUN set -eux; \
       /opt/ansible/.ansible/tmp \
       /opt/ansible/.ansible/collections \
       /opt/ansible/.ansible/roles \
-      /usr/share/ansible/plugins/callback \
       /etc/ansible \
       /licenses \
       ${ANSIBLE_OPERATOR_DIR}; \
-    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible; \
-    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible; \
+    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible; \
+    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible; \
     printf "%s\n" \
       "[defaults]" \
-      "callback_plugins = /usr/share/ansible/plugins/callback" \
-      "stdout_callback = ansible_runner" \
       "bin_ansible_callbacks = True" \
       "nocows = 1" \
       > /etc/ansible/ansible.cfg
@@ -131,12 +125,6 @@ RUN set -eux; \
       "openshift>=0.13.2"; \
     python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
     ansible-runner --version; \
-    mkdir -p /usr/share/ansible/plugins/callback /etc/ansible; \
-    python3 /tmp/install_runner_callback.py; \
-    rm -f /tmp/install_runner_callback.py; \
-    \
-    ansible-doc -t callback $(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('/etc/ansible/ansible.cfg'); print(c.get('defaults','stdout_callback'))") \
-      >/dev/null 2>&1 || (echo 'ERROR: configured callback not discoverable' && exit 1); \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
