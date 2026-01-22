@@ -6,6 +6,13 @@
 # - Mirror official ose-ansible-rhel9-operator runtime behavior so runner events
 #   (including playbook_on_stats) work exactly like the base image.
 # - Avoid pip-installing ansible-runner (layout/codec issues) and avoid heredocs.
+#
+# Fixes included:
+# - ansible-runner CLI present AND verified only after ansible_runner module exists
+# - ansible-playbook present (install ansible-core from UBI RPMs)
+# - robust site-packages selection (find dir that actually contains ansible + ansible_runner)
+# - required python deps installed in ONE pip transaction; pip check included
+# - avoid touching /usr/share/ansible when it doesn't exist
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -32,6 +39,7 @@ RUN set -eux; \
 # 2) Enable UBI repos + install Python runtime
 #    NOTE: UBI containers may not provide dnf modules; do NOT use `dnf module`.
 #    Create stable /usr/local/bin/python3 + pip3 pointing at what we have.
+#    ALSO: install ansible-core so ansible-playbook exists (runner exec requirement).
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum findutils which tar gzip shadow-utils; \
@@ -51,11 +59,20 @@ RUN set -eux; \
     fi; \
     /usr/local/bin/python3 -V; \
     /usr/local/bin/python3 -m pip --version; \
+    \
+    # REQUIRED: provide ansible-playbook/ansible-galaxy executables (runner needs ansible-playbook)
+    dnf -y install ansible-core; \
+    command -v ansible-playbook; \
+    ansible-playbook --version; \
+    \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # Silence pip "root" warnings during image builds
 ENV PIP_ROOT_USER_ACTION=ignore
+
+# Ensure the usual bin dirs are present in PATH
+ENV PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 # -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
@@ -96,7 +113,7 @@ COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
 COPY --from=operator-src /usr/local/lib/ /tmp/operator-src/usr-local-lib/
 COPY --from=operator-src /usr/local/lib64/ /tmp/operator-src/usr-local-lib64/
-# (often needed for RPM-installed python libs)
+# Often needed for RPM-installed python libs in operator-src
 COPY --from=operator-src /usr/lib/ /tmp/operator-src/usr-lib/
 COPY --from=operator-src /usr/lib64/ /tmp/operator-src/usr-lib64/
 
@@ -140,7 +157,7 @@ RUN set -eux; \
 #
 #    FIXES:
 #    - Choose the site-packages directory that actually contains ansible + runner
-#    - Install missing deps required by copied stack
+#    - Install missing deps required by copied stack (pexpect, PyYAML, python-daemon, etc.)
 #    - Verify ansible-runner CLI AFTER modules exist
 # -----------------------------------------------------------------------------
 RUN set -eux; \
@@ -186,7 +203,9 @@ RUN set -eux; \
     /usr/local/bin/python3 -m pip check; \
     /usr/local/bin/python3 -c "import pexpect, ptyprocess, yaml, daemon, lockfile, jinja2, packaging, resolvelib, cryptography; print('OK deps')"; \
     /usr/local/bin/python3 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"; \
-    /usr/local/bin/ansible-runner --version
+    /usr/local/bin/ansible-runner --version; \
+    command -v ansible-playbook; \
+    ansible-playbook --version
 
 # -----------------------------------------------------------------------------
 # 9) Clean temp copies
