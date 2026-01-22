@@ -132,45 +132,77 @@ RUN set -eux; \
     ansible-runner --version; \
     mkdir -p /usr/share/ansible/plugins/callback /etc/ansible; \
     \
-    python3 -c "import os, glob, shutil, configparser, ansible_runner; \
-pkg_dir=os.path.dirname(ansible_runner.__file__); \
-candidates=[ \
-  os.path.join(pkg_dir,'plugins','callback'), \
-  os.path.join(pkg_dir,'display_callback','callback'), \
-  os.path.join(pkg_dir,'interface','callback'), \
-]; \
-found=None; pyfiles=[]; \
-for d in candidates: \
-  if os.path.isdir(d): \
-    pyfiles=[p for p in glob.glob(os.path.join(d,'*.py')) if not p.endswith('__init__.py')]; \
-    if pyfiles: found=d; break; \
-\
-assert found, f'ERROR: Could not find ansible-runner callback dir. Tried: {candidates}'; \
-dst='/usr/share/ansible/plugins/callback'; \
-os.makedirs(dst, exist_ok=True); \
-[shutil.copy2(p, os.path.join(dst, os.path.basename(p))) for p in pyfiles]; \
-names=[os.path.splitext(os.path.basename(p))[0] for p in pyfiles]; \
-preferred=None; \
-for cand in ('ansible_runner','runner','awx_display','display'): \
-  if cand in names: preferred=cand; break; \
-preferred = preferred or sorted(names)[0]; \
-cfg_path='/etc/ansible/ansible.cfg'; \
-with open(cfg_path,'w') as f: \
-  f.write('[defaults]\\n'); \
-  f.write('callback_plugins = /usr/share/ansible/plugins/callback\\n'); \
-  f.write(f'stdout_callback = {preferred}\\n'); \
-  f.write('bin_ansible_callbacks = True\\n'); \
-  f.write('nocows = 1\\n'); \
-print('Callback dir:', found); \
-print('Copied plugins:', ','.join(sorted(names))); \
-print('Configured stdout_callback:', preferred); \
-cfg=configparser.ConfigParser(); cfg.read(cfg_path); \
-print('Sanity stdout_callback:', cfg.get('defaults','stdout_callback',fallback=''))"; \
+    # Write a real python script via base64 (buildah/podman safe)
+    python3 -c "import base64,sys; \
+script = '''\
+import os, glob, shutil, configparser
+import ansible_runner
+
+pkg_dir = os.path.dirname(ansible_runner.__file__)
+candidates = [
+    os.path.join(pkg_dir, 'plugins', 'callback'),
+    os.path.join(pkg_dir, 'display_callback', 'callback'),
+    os.path.join(pkg_dir, 'interface', 'callback'),
+]
+
+found = None
+pyfiles = []
+for d in candidates:
+    if os.path.isdir(d):
+        pyfiles = [p for p in glob.glob(os.path.join(d, '*.py')) if not p.endswith('__init__.py')]
+        if pyfiles:
+            found = d
+            break
+
+if not found:
+    raise SystemExit(f'ERROR: Could not find ansible-runner callback dir. Tried: {candidates}')
+
+dst = '/usr/share/ansible/plugins/callback'
+os.makedirs(dst, exist_ok=True)
+
+for p in pyfiles:
+    shutil.copy2(p, os.path.join(dst, os.path.basename(p)))
+
+names = [os.path.splitext(os.path.basename(p))[0] for p in pyfiles]
+
+preferred = None
+for cand in ('ansible_runner', 'runner', 'awx_display', 'display'):
+    if cand in names:
+        preferred = cand
+        break
+if not preferred:
+    preferred = sorted(names)[0]
+
+cfg_path = '/etc/ansible/ansible.cfg'
+os.makedirs('/etc/ansible', exist_ok=True)
+with open(cfg_path, 'w') as f:
+    f.write('[defaults]\\n')
+    f.write('callback_plugins = /usr/share/ansible/plugins/callback\\n')
+    f.write(f'stdout_callback = {preferred}\\n')
+    f.write('bin_ansible_callbacks = True\\n')
+    f.write('nocows = 1\\n')
+
+print('Callback dir:', found)
+print('Copied plugins:', ','.join(sorted(names)))
+print('Configured stdout_callback:', preferred)
+
+cfg = configparser.ConfigParser()
+cfg.read(cfg_path)
+print('Sanity stdout_callback:', cfg.get('defaults', 'stdout_callback', fallback=''))
+'''; \
+open('/tmp/install_runner_callback.b64','w').write(base64.b64encode(script.encode('utf-8')).decode('ascii'))"; \
+    python3 -c "import base64; \
+open('/tmp/install_runner_callback.py','wb').write(base64.b64decode(open('/tmp/install_runner_callback.b64','rb').read()))"; \
+    python3 /tmp/install_runner_callback.py; \
+    rm -f /tmp/install_runner_callback.py /tmp/install_runner_callback.b64; \
     \
-    ansible-doc -t callback $(python3 -c \"import configparser; c=configparser.ConfigParser(); c.read('/etc/ansible/ansible.cfg'); print(c.get('defaults','stdout_callback'))\") \
+    # Sanity check: configured callback is discoverable
+    ansible-doc -t callback $(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('/etc/ansible/ansible.cfg'); print(c.get('defaults','stdout_callback'))") \
       >/dev/null 2>&1 || (echo 'ERROR: configured callback not discoverable' && exit 1); \
+    \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
 
 # -----------------------------------------------------------------------------
 # 8) Required certification labels + NOTICE
