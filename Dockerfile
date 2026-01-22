@@ -30,7 +30,6 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 2) Enable UBI repos + install Python 3.12 runtime (do NOT pip ansible/runner)
-#    RHEL9/UBI has python3.12 as a parallel installable suite in newer minors.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum findutils which tar gzip shadow-utils; \
@@ -38,9 +37,14 @@ RUN set -eux; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y makecache --refresh; \
-    dnf -y install python3.12 python3.12-pip python3.12-setuptools python3.12-wheel || true; \
-    dnf -y install python3.12 python3.12-pip || true; \
+    \
+    # Prefer the module stream so python3.12 actually resolves on all UBI9 minors
+    dnf -y module reset python || true; \
+    dnf -y module enable python:3.12; \
+    \
+    dnf -y install python3.12 python3.12-pip python3.12-setuptools python3.12-wheel; \
     /usr/bin/python3.12 -V; \
+    /usr/bin/python3.12 -m pip --version; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
@@ -76,6 +80,7 @@ COPY --from=operator-src /opt/ /opt/
 #    (This is what keeps runner events working like the official image.)
 # -----------------------------------------------------------------------------
 COPY --from=operator-src /etc/ansible/ /etc/ansible/
+# NOTE: operator-src does NOT always ship /usr/share/ansible, so do not copy it.
 # COPY --from=operator-src /usr/share/ansible/ /usr/share/ansible/
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
@@ -101,11 +106,15 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 8) Copy the *exact* Python 3.12 site-packages for ansible + ansible_runner
 #    from operator-src into this rebased image’s Python 3.12 site-packages.
+#
+#    ALSO: install missing runtime deps required by the copied stack.
+#    Fix for: ModuleNotFoundError: No module named 'pexpect'
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     DEST_SITEPKG="$("/usr/bin/python3.12" -c 'import site; print(site.getsitepackages()[0])')"; \
     echo "DEST_SITEPKG=${DEST_SITEPKG}"; \
     mkdir -p "${DEST_SITEPKG}"; \
+    \
     SRC_SITEPKG=""; \
     for d in \
       /tmp/operator-src/usr-local-lib/python3.12/site-packages \
@@ -115,15 +124,18 @@ RUN set -eux; \
     done; \
     if [ -z "$SRC_SITEPKG" ]; then \
       echo "ERROR: could not find operator-src python3.12 site-packages under /usr/local/lib{,64}"; \
-      find /tmp/operator-src -maxdepth 6 -type d -name site-packages | head -n 200 || true; \
+      find /tmp/operator-src -maxdepth 8 -type d -name site-packages | head -n 200 || true; \
       exit 1; \
     fi; \
     echo "Using SRC_SITEPKG=${SRC_SITEPKG}"; \
+    \
     cp -a "${SRC_SITEPKG}/ansible" "${DEST_SITEPKG}/"; \
     cp -a "${SRC_SITEPKG}/ansible_runner" "${DEST_SITEPKG}/"; \
+    \
     # copy related dist-info if present (helps packaging metadata)
     cp -a "${SRC_SITEPKG}"/ansible-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     cp -a "${SRC_SITEPKG}"/ansible_runner-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
+    \
     # ansible-runner on some builds expects importlib_metadata + zipp (py<3.10)
     if [ -d "${SRC_SITEPKG}/importlib_metadata" ] && [ -d "${SRC_SITEPKG}/zipp" ]; then \
       cp -a "${SRC_SITEPKG}/importlib_metadata" "${DEST_SITEPKG}/"; \
@@ -131,6 +143,12 @@ RUN set -eux; \
       cp -a "${SRC_SITEPKG}"/importlib_metadata-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
       cp -a "${SRC_SITEPKG}"/zipp-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     fi; \
+    \
+    # FIX: copied ansible stack expects pexpect (and ptyprocess). Install into py3.12 site-packages.
+    /usr/bin/python3.12 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
+    /usr/bin/python3.12 -m pip install --no-cache-dir "pexpect>=4.8.0" "ptyprocess>=0.7.0"; \
+    \
+    /usr/bin/python3.12 -c "import pexpect, ptyprocess; print('OK deps:', pexpect.__version__)"; \
     /usr/bin/python3.12 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"
 
 # -----------------------------------------------------------------------------
@@ -174,7 +192,6 @@ RUN set -eux; \
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
     if [ -s /tmp/requirements.yml ]; then \
-      # use operator-src’s ansible-galaxy if present, otherwise ansible will still work
       if command -v ansible-galaxy >/dev/null 2>&1; then \
         ansible-galaxy collection install -r /tmp/requirements.yml \
           --collections-path /opt/ansible/.ansible/collections; \
