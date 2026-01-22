@@ -1,12 +1,12 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator (Ansible Operator) - Path B (Publish REBASED UBI image)
 #
-# Goals:
-# - Rebase onto UBI9 but keep the official ose-ansible-operator runtime
+# Fixes:
+# - Preserve operator runtime (entrypoint + ansible-operator)
+# - Do NOT use copied ansible-galaxy wrapper (it points to /usr/local/bin/python3)
+# - Use UBI's ansible-core (ansible-galaxy uses /usr/bin/python3)
 # - Avoid curl vs curl-minimal conflict (do NOT install curl)
-# - Avoid repo-mixing by removing redhat.repo
-# - Ensure container does NOT exit immediately (CrashLoopBackOff ExitCode 0)
-# - Ensure logs show in OpenShift console (stdout/stderr)
+# - Remove redhat.repo to avoid repo mixing
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -14,7 +14,7 @@ ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f
 # Stage 0: official operator base (source of runtime bits)
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
-# Stage 1: rebased UBI filesystem we publish
+# Final: rebased UBI filesystem we publish
 FROM registry.access.redhat.com/ubi9/ubi:latest AS final
 
 USER 0
@@ -26,7 +26,7 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# Enable UBI repos + install tooling INCLUDING ansible-core
+# Install python + ansible-core from UBI (this provides a working ansible-galaxy)
 # NOTE: Do NOT install curl (curl-minimal already present and conflicts)
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum python3 python3-setuptools ansible-core; \
@@ -34,7 +34,7 @@ RUN set -eux; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y repolist; \
-    python3 --version; \
+    /usr/bin/python3 --version; \
     ansible-galaxy --version; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
@@ -51,12 +51,15 @@ RUN set -eux; \
     mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator
 
 # Copy operator runtime bits from official base
-# IMPORTANT: /etc/ansible-operator may not exist in the source image -> do NOT copy it.
-# What we DO need:
-# - /opt (operator SDK / ansible-runner bits, watches layout, etc.)
-# - /usr/local/bin (entrypoint + ansible-operator binary)
 COPY --from=operator-src /opt/ /opt/
 COPY --from=operator-src /usr/local/bin/ /usr/local/bin/
+
+# IMPORTANT: remove copied ansible wrappers that reference /usr/local/bin/python3
+# We want to use UBI's ansible-core ones in /usr/bin instead.
+RUN set -eux; \
+    rm -f /usr/local/bin/ansible /usr/local/bin/ansible-playbook /usr/local/bin/ansible-galaxy /usr/local/bin/ansible-config || true; \
+    command -v ansible-galaxy; \
+    head -n1 "$(command -v ansible-galaxy)" || true
 
 # Certification labels
 LABEL name="webserver-operator-dev" \
@@ -79,7 +82,7 @@ ENV ANSIBLE_STDOUT_CALLBACK=default \
     PYTHONUNBUFFERED=1 \
     ANSIBLE_DEPRECATION_WARNINGS=False
 
-# Install required Ansible collections (use UBI’s ansible-galaxy from ansible-core)
+# Install required Ansible collections using UBI's ansible-galaxy
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
     ansible-galaxy collection install -r /tmp/requirements.yml \
@@ -97,7 +100,7 @@ RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin
 
-# CRITICAL: force operator entrypoint so container doesn't exit immediately (ExitCode 0 / Completed)
+# Force operator entrypoint so container doesn't exit immediately
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
 CMD ["/usr/local/bin/ansible-operator", "run", "--watches-file=/opt/ansible-operator/watches.yaml"]
 
