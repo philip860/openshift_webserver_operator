@@ -76,7 +76,7 @@ COPY --from=operator-src /opt/ /opt/
 #    (This is what keeps runner events working like the official image.)
 # -----------------------------------------------------------------------------
 COPY --from=operator-src /etc/ansible/ /etc/ansible/
-COPY --from=operator-src /usr/share/ansible/ /usr/share/ansible/
+# COPY --from=operator-src /usr/share/ansible/ /usr/share/ansible/
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
 COPY --from=operator-src /usr/local/lib/ /tmp/operator-src/usr-local-lib/
