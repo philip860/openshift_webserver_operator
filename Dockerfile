@@ -54,8 +54,6 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 4) OpenShift-friendly dirs + IMPORTANT runner callback settings
-#    NOTE: We must NOT force stdout to "default" here; ansible-runner needs
-#          the ansible_runner callback to emit events (including playbook_on_stats).
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -109,7 +107,6 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 7) Install ansible-runner + k8s deps via pip, then ensure callback plugin is discoverable
-#    This is the key fix for "did not receive playbook_on_stats event".
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
@@ -118,10 +115,11 @@ RUN set -eux; \
       "kubernetes>=24.2.0" \
       "openshift>=0.13.2"; \
     python3 -c "import kubernetes, openshift; print('python deps OK')"; \
-    ansible-runner --version; \
-    \
-    # Write a temp Python script (avoids Docker heredoc parsing edge-cases)
-    cat > /tmp/copy_callbacks.py <<'PY'; \
+    ansible-runner --version
+
+# IMPORTANT: heredoc delimiter must be alone on the line (no ';', no '\')
+RUN set -eux; \
+    cat > /tmp/copy_callbacks.py <<'PY'
 import os, shutil
 import ansible_runner
 
@@ -135,14 +133,11 @@ for fn in os.listdir(cb_src):
 
 print("Copied callbacks from", cb_src, "to", cb_dst)
 PY
+RUN set -eux; \
     python3 /tmp/copy_callbacks.py; \
     rm -f /tmp/copy_callbacks.py; \
-    \
-    # Make sure Ansible sees this directory
     mkdir -p /etc/ansible; \
     printf "[defaults]\ncallback_plugins = /usr/share/ansible/plugins/callback\nstdout_callback = ansible_runner\n" > /etc/ansible/ansible.cfg; \
-    \
-    # Sanity: confirm Ansible can load the callback
     ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
