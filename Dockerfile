@@ -7,6 +7,7 @@
 # - ansible-runner executable exists in PATH AND its python module is installed for /usr/bin/python3
 # - runner callback plugin copied into a standard callback_plugins path
 # - pin resolvelib to satisfy ansible-core 2.14.x requirements (resolvelib<0.9.0)
+# - do NOT use ansible_runner.__version__ (not always present); validate via CLI instead
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -106,7 +107,6 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 7) Install ansible-runner CLI from operator-src so the operator can exec it
-#    NOTE: do NOT run it yet; we'll install python module next.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     if [ -x /tmp/operator-src/usr-local-bin/ansible-runner ]; then \
@@ -132,7 +132,9 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 9) Install python deps for *system python* (/usr/bin/python3)
-#    This fixes: "Failed to import ... (kubernetes) ... Python /usr/bin/python3"
+#    - Fixes: missing kubernetes/openshift libs for localhost modules
+#    - Fixes: runner deps pexpect/pyyaml/python-daemon/etc
+#    - IMPORTANT: do NOT reference ansible_runner.__version__ (not always present)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     /usr/bin/python3 -m pip install --no-cache-dir --upgrade -c /etc/pip-constraints.txt \
@@ -152,7 +154,8 @@ RUN set -eux; \
     \
     /usr/bin/python3 -m pip check; \
     /usr/bin/python3 -c "import kubernetes, openshift; print('OK: k8s libs')"; \
-    /usr/bin/python3 -c "import ansible_runner; print('OK: ansible_runner', ansible_runner.__version__)"
+    /usr/bin/python3 -c "import ansible_runner; print('OK: ansible_runner import:', ansible_runner.__file__)"; \
+    /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
 # 10) Make ansible-runner callback plugin discoverable (standard path)
