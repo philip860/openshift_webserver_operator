@@ -130,20 +130,45 @@ RUN set -eux; \
       "openshift>=0.13.2"; \
     python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
     ansible-runner --version; \
+    mkdir -p /usr/share/ansible/plugins/callback /etc/ansible; \
     \
-    # Copy the ansible_runner callback plugin to a standard path.
-    python3 -c "import os, shutil, ansible_runner; \
+    python3 -c "import os, glob, shutil, configparser, ansible_runner; \
 pkg_dir=os.path.dirname(ansible_runner.__file__); \
-src=os.path.join(pkg_dir,'plugins','callback','ansible_runner.py'); \
-dst_dir='/usr/share/ansible/plugins/callback'; \
-os.makedirs(dst_dir, exist_ok=True); \
-print('Looking for callback at', src); \
-assert os.path.exists(src), 'ERROR: expected callback ansible_runner.py not found (pinning failed or layout differs)'; \
-shutil.copy2(src, os.path.join(dst_dir,'ansible_runner.py')); \
-print('Copied', src, 'to', dst_dir)"; \
+candidates=[ \
+  os.path.join(pkg_dir,'plugins','callback'), \
+  os.path.join(pkg_dir,'display_callback','callback'), \
+  os.path.join(pkg_dir,'interface','callback'), \
+]; \
+found=None; pyfiles=[]; \
+for d in candidates: \
+  if os.path.isdir(d): \
+    pyfiles=[p for p in glob.glob(os.path.join(d,'*.py')) if not p.endswith('__init__.py')]; \
+    if pyfiles: found=d; break; \
+\
+assert found, f'ERROR: Could not find ansible-runner callback dir. Tried: {candidates}'; \
+dst='/usr/share/ansible/plugins/callback'; \
+os.makedirs(dst, exist_ok=True); \
+[shutil.copy2(p, os.path.join(dst, os.path.basename(p))) for p in pyfiles]; \
+names=[os.path.splitext(os.path.basename(p))[0] for p in pyfiles]; \
+preferred=None; \
+for cand in ('ansible_runner','runner','awx_display','display'): \
+  if cand in names: preferred=cand; break; \
+preferred = preferred or sorted(names)[0]; \
+cfg_path='/etc/ansible/ansible.cfg'; \
+with open(cfg_path,'w') as f: \
+  f.write('[defaults]\\n'); \
+  f.write('callback_plugins = /usr/share/ansible/plugins/callback\\n'); \
+  f.write(f'stdout_callback = {preferred}\\n'); \
+  f.write('bin_ansible_callbacks = True\\n'); \
+  f.write('nocows = 1\\n'); \
+print('Callback dir:', found); \
+print('Copied plugins:', ','.join(sorted(names))); \
+print('Configured stdout_callback:', preferred); \
+cfg=configparser.ConfigParser(); cfg.read(cfg_path); \
+print('Sanity stdout_callback:', cfg.get('defaults','stdout_callback',fallback=''))"; \
     \
-    # Sanity: confirm Ansible can load the callback
-    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
+    ansible-doc -t callback $(python3 -c \"import configparser; c=configparser.ConfigParser(); c.read('/etc/ansible/ansible.cfg'); print(c.get('defaults','stdout_callback'))\") \
+      >/dev/null 2>&1 || (echo 'ERROR: configured callback not discoverable' && exit 1); \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
