@@ -106,6 +106,7 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 7) Install ansible-runner + k8s deps via pip
 #    Then: copy runner callback plugins and set stdout_callback to the REAL plugin name.
+#    IMPORTANT: Use temp files (portable for podman/buildah) - no python3 - <<'PY'
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
@@ -116,13 +117,12 @@ RUN set -eux; \
     python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
     ansible-runner --version; \
     \
-    python3 - <<'PY'
-import os, glob, shutil
+    cat > /tmp/install_runner_callback.py <<'PY'
+import os, glob, shutil, configparser
 import ansible_runner
 
 pkg_dir = os.path.dirname(ansible_runner.__file__)
 
-# These cover runner 2.3.x and 2.4.x layouts
 candidates = [
     os.path.join(pkg_dir, "plugins", "callback"),
     os.path.join(pkg_dir, "display_callback", "callback"),
@@ -130,6 +130,7 @@ candidates = [
 ]
 
 found = None
+pyfiles = []
 for d in candidates:
     if os.path.isdir(d):
         pyfiles = [p for p in glob.glob(os.path.join(d, "*.py")) if not p.endswith("__init__.py")]
@@ -143,14 +144,11 @@ if not found:
 dst = "/usr/share/ansible/plugins/callback"
 os.makedirs(dst, exist_ok=True)
 
-pyfiles = [p for p in glob.glob(os.path.join(found, "*.py")) if not p.endswith("__init__.py")]
 for p in pyfiles:
     shutil.copy2(p, os.path.join(dst, os.path.basename(p)))
 
 print("Copied callback plugin file(s) from", found, "to", dst)
 
-# Pick the "best" stdout callback name:
-# Prefer a file that looks like the runner callback; fall back to the first plugin file.
 names = [os.path.splitext(os.path.basename(p))[0] for p in pyfiles]
 preferred = None
 for cand in ("ansible_runner", "runner", "awx_display", "display"):
@@ -160,10 +158,9 @@ for cand in ("ansible_runner", "runner", "awx_display", "display"):
 if not preferred:
     preferred = sorted(names)[0]
 
-# Write ansible.cfg to use the discovered callback plugin
-cfg = "/etc/ansible/ansible.cfg"
 os.makedirs("/etc/ansible", exist_ok=True)
-with open(cfg, "w") as f:
+cfg_path = "/etc/ansible/ansible.cfg"
+with open(cfg_path, "w") as f:
     f.write("[defaults]\n")
     f.write("callback_plugins = /usr/share/ansible/plugins/callback\n")
     f.write(f"stdout_callback = {preferred}\n")
@@ -171,16 +168,14 @@ with open(cfg, "w") as f:
     f.write("nocows = 1\n")
 
 print("Configured stdout_callback =", preferred)
-PY
-    \
-    # Sanity: ensure ansible can see the configured callback
-    python3 - <<'PY'
-import configparser
+
+# Sanity check read-back
 cfg = configparser.ConfigParser()
-cfg.read("/etc/ansible/ansible.cfg")
-cb = cfg.get("defaults", "stdout_callback", fallback="")
-print("Sanity check: stdout_callback =", cb)
+cfg.read(cfg_path)
+print("Sanity check: stdout_callback =", cfg.get("defaults", "stdout_callback", fallback=""))
 PY
+    python3 /tmp/install_runner_callback.py; \
+    rm -f /tmp/install_runner_callback.py; \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
