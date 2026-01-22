@@ -191,20 +191,18 @@ RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # 10) Option A: Provide our own tiny entrypoint shim
-#     This is what makes the container *actually run the operator*.
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 RUN set -eux; \
-    cat > /usr/local/bin/entrypoint <<'EOF'\n\
-#!/bin/sh\n\
-set -eu\n\
-# Run the operator using the watches file packaged into the image.\n\
-# The operator will still consume the standard env vars injected by the CSV:\n\
-#   WATCH_NAMESPACE, POD_NAME, OPERATOR_NAME (deprecated), etc.\n\
-exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml\n\
-EOF\n\
-    chmod +x /usr/local/bin/entrypoint
+    cat > /usr/local/bin/entrypoint <<'EOF'
+#!/bin/sh
+set -eu
+# Run the operator using the watches file packaged into the image.
+# Env vars injected by the CSV (WATCH_NAMESPACE, POD_NAME, etc.) are still honored.
+exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml
+EOF
+RUN chmod +x /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
 # 11) Drop to non-root for OpenShift
