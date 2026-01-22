@@ -105,8 +105,7 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 7) Install ansible-runner + k8s deps via pip
-#    Then: copy runner callback plugins and set stdout_callback to the REAL plugin name.
-#    IMPORTANT: Use temp files (portable for podman/buildah) - no python3 - <<'PY'
+#    Then: install runner callback plugin(s) WITHOUT heredocs (buildah-safe)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
@@ -116,12 +115,16 @@ RUN set -eux; \
       "openshift>=0.13.2"; \
     python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
     ansible-runner --version; \
-    cat > /tmp/install_runner_callback.py <<'PY'
-import os, glob, shutil, configparser
+    \
+    mkdir -p /usr/share/ansible/plugins/callback /etc/ansible; \
+    \
+    # Write callback installer script via base64 (no heredoc parsing issues)
+    python3 - <<'PY'
+import base64, textwrap
+script = r'''import os, glob, shutil, configparser
 import ansible_runner
 
 pkg_dir = os.path.dirname(ansible_runner.__file__)
-
 candidates = [
     os.path.join(pkg_dir, "plugins", "callback"),
     os.path.join(pkg_dir, "display_callback", "callback"),
@@ -157,26 +160,25 @@ for cand in ("ansible_runner", "runner", "awx_display", "display"):
 if not preferred:
     preferred = sorted(names)[0]
 
-os.makedirs("/etc/ansible", exist_ok=True)
 cfg_path = "/etc/ansible/ansible.cfg"
+os.makedirs("/etc/ansible", exist_ok=True)
 with open(cfg_path, "w") as f:
-    f.write("[defaults]\n")
-    f.write("callback_plugins = /usr/share/ansible/plugins/callback\n")
-    f.write(f"stdout_callback = {preferred}\n")
-    f.write("bin_ansible_callbacks = True\n")
-    f.write("nocows = 1\n")
+    f.write("[defaults]\\n")
+    f.write("callback_plugins = /usr/share/ansible/plugins/callback\\n")
+    f.write(f"stdout_callback = {preferred}\\n")
+    f.write("bin_ansible_callbacks = True\\n")
+    f.write("nocows = 1\\n")
 
 print("Configured stdout_callback =", preferred)
 
 cfg = configparser.ConfigParser()
 cfg.read(cfg_path)
 print("Sanity check: stdout_callback =", cfg.get("defaults", "stdout_callback", fallback=""))
+'''
+b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+print(b64)
 PY
-    ; \
-    python3 /tmp/install_runner_callback.py; \
-    rm -f /tmp/install_runner_callback.py; \
-    dnf -y clean all || true; \
-    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
 
 
 # -----------------------------------------------------------------------------
