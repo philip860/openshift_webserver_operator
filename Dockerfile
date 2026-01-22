@@ -178,14 +178,16 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 10) Entrypoint shim
 # -----------------------------------------------------------------------------
+# ---- Create entrypoint (NO heredoc tricks, strict and portable) ----
 RUN set -eux; \
-    cat > /usr/local/bin/entrypoint <<'EOF'\n\
-#!/bin/sh\n\
-set -eu\n\
-exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml\n\
-EOF\n\
-    ; \
-    chmod +x /usr/local/bin/entrypoint
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '' \
+    '# Run the operator using the watches file packaged into the image.' \
+    'exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml' \
+  > /usr/local/bin/entrypoint; \
+  chmod 0755 /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
 # 11) Drop to non-root for OpenShift
