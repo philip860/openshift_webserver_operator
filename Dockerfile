@@ -9,7 +9,7 @@
 #        - respect CSV/env vars (WATCH_NAMESPACE, OPERATOR_NAME, etc.)
 #   3) Avoid repo mixing + curl conflicts:
 #        - remove redhat.repo
-#        - do NOT install curl (curl-minimal is already present in UBI)
+#        - do NOT install curl (curl-minimal is already present and conflicts)
 #   4) Fix common runtime failures:
 #        - arbitrary UID permissions (OpenShift SCC)
 #        - kubernetes/openshift python libs needed by kubernetes.core modules
@@ -52,7 +52,7 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum \
-      python3 python3-setuptools python3-pip python3-virtualenv \
+      python3 python3-setuptools python3-pip \
       ansible-core; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
@@ -161,7 +161,7 @@ RUN set -eux; \
       "${VENV_DIR}/bin/python" -m pip install --no-cache-dir \
         "kubernetes>=24.2.0" \
         "openshift>=0.13.2"; \
-      "${VENV_DIR}/bin/python" -c "import kubernetes, openshift; print('python deps OK (venv)')" ; \
+      "${VENV_DIR}/bin/python" -c "import kubernetes, openshift; print('python deps OK (venv)')"; \
     fi; \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
