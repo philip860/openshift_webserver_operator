@@ -1,14 +1,14 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator (Ansible Operator) - Path B (Publish REBASED UBI image)
 # Fixes:
-# - avoid curl vs curl-minimal conflict (do NOT install curl)
-# - avoid rhel-9-for-* repo mixing by removing redhat.repo
-# - install ansible-core in UBI so ansible-galaxy works (no copied wrapper needed)
+# - preserve operator ENTRYPOINT/CMD (prevents exit 0/Completed CrashLoop)
+# - copy required runtime bits beyond /opt (ansible-operator binary + entrypoint)
+# - keep UBI repos only; avoid curl vs curl-minimal conflict
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
-# Stage 0: official operator base (source of runtime bits we want under /opt)
+# Stage 0: official operator base (source of runtime bits)
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
 # Stage 1: rebased UBI filesystem we publish
@@ -23,8 +23,7 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# Enable UBI repos + install tooling INCLUDING ansible-core
-# NOTE: Do NOT install curl (curl-minimal already present and conflicts)
+# Install tooling INCLUDING ansible-core (do NOT install curl; curl-minimal conflicts)
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum python3 python3-setuptools ansible-core; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
@@ -47,9 +46,13 @@ RUN set -eux; \
 RUN set -eux; \
     mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator
 
-# Copy operator runtime bits from official base (keep it to /opt only)
-# This avoids dragging in wrappers that may not match UBI’s python/ansible.
+# Copy operator runtime bits from official base
+# IMPORTANT: include entrypoint + binary + config, not just /opt
 COPY --from=operator-src /opt/ /opt/
+COPY --from=operator-src /usr/local/bin/ /usr/local/bin/
+COPY --from=operator-src /etc/ansible-operator/ /etc/ansible-operator/
+# (Optional but safe) some images rely on these at runtime
+COPY --from=operator-src /ansible-operator/ /ansible-operator/
 
 # Required certification labels
 LABEL name="webserver-operator-dev" \
@@ -59,7 +62,6 @@ LABEL name="webserver-operator-dev" \
       release="1" \
       summary="Kubernetes operator to deploy and manage web workloads" \
       description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
-
 
 # Licensing
 RUN mkdir -p /licenses \
@@ -80,13 +82,13 @@ COPY roles/ ./roles/
 
 # OpenShift-friendly permissions (arbitrary UID)
 RUN set -eux; \
-    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses; \
-    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses
+    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /etc/ansible-operator /ansible-operator || true; \
+    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /etc/ansible-operator /ansible-operator || true
 
-USER 1001
-ENV ANSIBLE_USER_ID=1001
+# IMPORTANT: force the operator entrypoint so the container doesn't "complete" immediately
+# These paths come from the operator-src image we copied from.
+ENTRYPOINT ["/usr/local/bin/entrypoint"]
+CMD ["/usr/local/bin/ansible-operator", "run", "--watches-file=/opt/ansible-operator/watches.yaml"]
 
-# Final stage: publish the rebased UBI filesystem
-FROM rebased AS final
 USER 1001
 ENV ANSIBLE_USER_ID=1001
