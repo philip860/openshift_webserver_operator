@@ -1,10 +1,8 @@
 # -----------------------------------------------------------------------------
-# WebServer Operator (Ansible Operator) - Path B (Rebased UBI9 image)
+# WebServer Operator (Ansible Operator) - Rebased UBI9 image
 #
-# Fixes:
-# - ENTRYPOINT uses /usr/local/bin/ansible-operator (no /usr/local/bin/entrypoint)
-# - Use UBI python + ansible-core for ansible-galaxy
-# - Install ansible-runner (required at runtime by ansible-operator)
+# Fix:
+# - ansible-runner not in repos -> install via pip and expose on PATH
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -21,19 +19,16 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# Enable UBI repos + install tooling
-# IMPORTANT: install ansible-runner (required by ansible-operator at runtime)
+# Enable UBI repos (best-effort) + install tooling
 # NOTE: Do NOT install curl (curl-minimal already present and conflicts)
 RUN set -eux; \
-    dnf -y install dnf-plugins-core ca-certificates yum \
-      python3 python3-setuptools \
-      ansible-core ansible-runner; \
+    dnf -y install dnf-plugins-core ca-certificates yum; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
+    dnf -y install python3 python3-setuptools python3-pip ansible-core; \
     /usr/bin/python3 --version; \
     ansible-galaxy --version; \
-    ansible-runner --version; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
@@ -46,20 +41,19 @@ RUN set -eux; \
 
 # Create expected dirs
 RUN set -eux; \
-    mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator /usr/local/bin
+    mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator /usr/local/bin /opt/pip
 
 # Copy operator runtime bits from official base:
-# - /opt runtime bits
-# - ansible-operator binary only
 COPY --from=operator-src /opt/ /opt/
 COPY --from=operator-src /usr/local/bin/ansible-operator /usr/local/bin/ansible-operator
 
-# Quick verify
+# Install ansible-runner via pip into /opt/pip and expose it on PATH
+# (pip install is the fallback when UBI repos don't provide ansible-runner)
 RUN set -eux; \
-    test -x /usr/local/bin/ansible-operator; \
-    /usr/local/bin/ansible-operator version; \
-    command -v ansible-runner; \
-    ansible-runner --version
+    /usr/bin/pip3 install --no-cache-dir --prefix /opt/pip "ansible-runner>=2.4,<3"; \
+    # add a stable executable path for ansible-operator to exec
+    ln -sf /opt/pip/bin/ansible-runner /usr/local/bin/ansible-runner; \
+    /usr/local/bin/ansible-runner --version
 
 # Certification labels
 LABEL name="webserver-operator-dev" \
@@ -72,7 +66,6 @@ LABEL name="webserver-operator-dev" \
 
 # Licensing
 RUN set -eux; \
-    mkdir -p /licenses; \
     printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
 # Make Ansible output visible in OpenShift pod logs (stdout/stderr)
@@ -80,7 +73,9 @@ ENV ANSIBLE_STDOUT_CALLBACK=default \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
     ANSIBLE_FORCE_COLOR=0 \
     PYTHONUNBUFFERED=1 \
-    ANSIBLE_DEPRECATION_WARNINGS=False
+    ANSIBLE_DEPRECATION_WARNINGS=False \
+    # ensure pip-installed tools are found even without the symlink
+    PATH="/opt/pip/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Install required Ansible collections
 COPY requirements.yml /tmp/requirements.yml
@@ -97,8 +92,8 @@ COPY roles/ ./roles/
 
 # OpenShift-friendly permissions (arbitrary UID)
 RUN set -eux; \
-    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin; \
-    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin
+    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin /opt/pip; \
+    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses /usr/local/bin /opt/pip
 
 USER 1001
 ENV ANSIBLE_USER_ID=1001
