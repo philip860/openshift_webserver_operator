@@ -52,7 +52,7 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum \
-      python3 python3-setuptools python3-pip \
+      python3 python3-setuptools python3-pip python3-virtualenv \
       ansible-core; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
@@ -63,6 +63,20 @@ RUN set -eux; \
     ansible-galaxy --version; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
+# -----------------------------------------------------------------------------
+# 2b) Install ansible-runner (required by ansible-operator) via pip in a venv
+#     Keep it isolated and put it on PATH.
+# -----------------------------------------------------------------------------
+ENV VENV_DIR=/opt/ansible/venv
+ENV PATH="${VENV_DIR}/bin:${PATH}"
+
+RUN set -eux; \
+    python3 -m venv "${VENV_DIR}"; \
+    "${VENV_DIR}/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
+    "${VENV_DIR}/bin/python" -m pip install --no-cache-dir \
+      "ansible-runner>=2.3.6"; \
+    ansible-runner --version
 
 # -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
@@ -115,10 +129,7 @@ RUN set -eux; \
       echo "ansible-operator already exists in this image (unexpected)"; \
     fi
 
-# We copy both possible locations in two COPY lines with guards via build args?
-# Dockerfile COPY cannot be conditional; so we use a safe approach:
-# - copy the whole /usr/local/bin and /usr/bin from operator-src into a temp dir,
-# - then install only the ansible-operator binary if found.
+# COPY cannot be conditional; copy both dirs then install only the binary if found.
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
 
@@ -139,18 +150,19 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 7) Install Python libraries required by kubernetes.core modules
 #    Fixes: "Failed to import the required Python library (kubernetes)"
-#    Try RPMs first; if not available in UBI repos, fall back to pip.
+#    Try RPMs first; if not available in UBI repos, fall back to pip (in the venv).
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     if dnf -y install python3-kubernetes python3-openshift; then \
       echo "Installed kubernetes/openshift via RPMs"; \
+      python3 -c "import kubernetes, openshift; print('python deps OK (system)')"; \
     else \
-      echo "RPMs not available; installing via pip"; \
-      python3 -m pip install --no-cache-dir \
+      echo "RPMs not available; installing via pip (venv)"; \
+      "${VENV_DIR}/bin/python" -m pip install --no-cache-dir \
         "kubernetes>=24.2.0" \
         "openshift>=0.13.2"; \
+      "${VENV_DIR}/bin/python" -c "import kubernetes, openshift; print('python deps OK (venv)')" ; \
     fi; \
-    python3 -c "import kubernetes, openshift; print('python deps OK')" ; \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
@@ -160,7 +172,7 @@ RUN set -eux; \
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
-      version="1.0.35" \
+      version="1.0.34-dev" \
       release="1" \
       summary="Kubernetes operator to deploy and manage web workloads" \
       description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
@@ -191,9 +203,9 @@ RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # 10) Option A: Provide our own tiny entrypoint shim
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 RUN set -eux; \
     cat > /usr/local/bin/entrypoint <<'EOF'
 #!/bin/sh
