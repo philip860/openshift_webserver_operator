@@ -1,57 +1,52 @@
 # -----------------------------------------------------------------------------
-# WebServer Operator (Ansible Operator) - Path B (Publish REBASED UBI image)
-# Fixes:
-# - avoid curl vs curl-minimal conflict (do NOT install curl)
-# - avoid rhel-9-for-* repo mixing by removing redhat.repo
-# - install ansible-core in UBI so ansible-galaxy works (no copied wrapper needed)
+# WebServer Operator - Keep OCP operator base (runner events OK) + pull UBI errata
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
-
-# Stage 0: official operator base (source of runtime bits we want under /opt)
-FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
-
-# Stage 1: rebased UBI filesystem we publish
-FROM registry.access.redhat.com/ubi9/ubi:latest AS rebased
+FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST}
 
 USER 0
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# Repo hygiene: keep UBI repos only
+# -----------------------------------------------------------------------------
+# 1) Add PUBLIC UBI repos (cdn-ubi.redhat.com) so you can get fixes not present
+#    in the OCP operator image repos.
+# -----------------------------------------------------------------------------
 RUN set -eux; \
-    rm -f /etc/yum.repos.d/redhat.repo || true; \
-    rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
+  cat > /etc/yum.repos.d/ubi.repo <<'EOF'
+[ubi-9-baseos-rpms]
+name=Red Hat Universal Base Image 9 (RPMs) - BaseOS
+baseurl=https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi9/9/$basearch/baseos/os
+enabled=1
+gpgcheck=0
 
-# Enable UBI repos + install tooling INCLUDING ansible-core
-# NOTE: Do NOT install curl (curl-minimal already present and conflicts)
+[ubi-9-appstream-rpms]
+name=Red Hat Universal Base Image 9 (RPMs) - AppStream
+baseurl=https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi9/9/$basearch/appstream/os
+enabled=1
+gpgcheck=0
+
+[ubi-9-codeready-builder-rpms]
+name=Red Hat Universal Base Image 9 (RPMs) - CodeReady Builder
+baseurl=https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi9/9/$basearch/codeready-builder/os
+enabled=1
+gpgcheck=0
+EOF
+
+# -----------------------------------------------------------------------------
+# 2) Pull security updates (from ANY enabled repos, including UBI)
+#    IMPORTANT: Do NOT replace ansible/ansible-runner via pip/dnf.
+# -----------------------------------------------------------------------------
 RUN set -eux; \
-    dnf -y install dnf-plugins-core ca-certificates yum python3 python3-setuptools ansible-core; \
-    dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
-    dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
-    dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
-    dnf -y repolist; \
-    python3 --version; \
-    ansible-galaxy --version; \
-    dnf -y clean all; \
-    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+  dnf -y makecache --refresh; \
+  dnf -y update --security --refresh || dnf -y update --refresh; \
+  dnf -y clean all; \
+  rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# Patch UBI first
-RUN set -eux; \
-    dnf -y makecache --refresh; \
-    dnf -y update --security --refresh; \
-    dnf -y clean all; \
-    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
-
-# Create expected dirs
-RUN set -eux; \
-    mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator
-
-# Copy operator runtime bits from official base (keep it to /opt only)
-# This avoids dragging in wrappers that may not match UBI’s python/ansible.
-COPY --from=operator-src /opt/ /opt/
-
-# Required certification labels
+# -----------------------------------------------------------------------------
+# 3) Certification labels + NOTICE
+# -----------------------------------------------------------------------------
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
@@ -60,32 +55,44 @@ LABEL name="webserver-operator" \
       summary="Kubernetes operator to deploy and manage web workloads" \
       description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
 
-# Licensing
-RUN mkdir -p /licenses \
- && printf "See project repository for license and terms.\n" > /licenses/NOTICE
+RUN set -eux; \
+  mkdir -p /licenses; \
+  printf "See project repository for license and terms.\n" > /licenses/NOTICE; \
+  chgrp -R 0 /licenses; \
+  chmod -R g+rwX /licenses
 
-# Install required Ansible collections (use UBI’s ansible-galaxy from ansible-core)
+# -----------------------------------------------------------------------------
+# 4) Operator content + collections
+# -----------------------------------------------------------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
-    ansible-galaxy collection install -r /tmp/requirements.yml \
-      --collections-path /opt/ansible/.ansible/collections; \
-    chmod -R g+rwX /opt/ansible/.ansible; \
-    rm -f /tmp/requirements.yml
+  if [ -s /tmp/requirements.yml ]; then \
+    ansible-galaxy collection install -r /tmp/requirements.yml; \
+  fi; \
+  rm -f /tmp/requirements.yml
 
-# Copy operator content
-COPY watches.yaml ./watches.yaml
-COPY playbooks/ ./playbooks/
-COPY roles/ ./roles/
+COPY watches.yaml ${ANSIBLE_OPERATOR_DIR}/watches.yaml
+COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
+COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
 
-# OpenShift-friendly permissions (arbitrary UID)
+# -----------------------------------------------------------------------------
+# 5) OpenShift permissions (random UID, group 0)
+# -----------------------------------------------------------------------------
 RUN set -eux; \
-    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses; \
-    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses
+  chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /licenses /opt/ansible /etc/ansible || true; \
+  chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /licenses /opt/ansible /etc/ansible || true
+
+# -----------------------------------------------------------------------------
+# 6) Entrypoint
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml' \
+  > /usr/local/bin/entrypoint; \
+  chmod 0755 /usr/local/bin/entrypoint
 
 USER 1001
 ENV ANSIBLE_USER_ID=1001
-
-# Final stage: publish the rebased UBI filesystem
-FROM rebased AS final
-USER 1001
-ENV ANSIBLE_USER_ID=1001
+ENTRYPOINT ["/usr/local/bin/entrypoint"]
