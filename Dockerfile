@@ -1,37 +1,57 @@
 # -----------------------------------------------------------------------------
-# WebServer Operator (Ansible Operator base) - patched + certification-friendly
+# WebServer Operator (Ansible Operator) - Path B (Publish REBASED UBI image)
+# Fixes:
+# - avoid curl vs curl-minimal conflict (do NOT install curl)
+# - avoid rhel-9-for-* repo mixing by removing redhat.repo
+# - install ansible-core in UBI so ansible-galaxy works (no copied wrapper needed)
 # -----------------------------------------------------------------------------
-#FROM quay.io/operator-framework/ansible-operator:v1.34.1
-FROM quay.io/operator-framework/ansible-operator:latest
 
-# Need root for patching + installing collections + permissions
+ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
+
+# Stage 0: official operator base (source of runtime bits we want under /opt)
+FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
+
+# Stage 1: rebased UBI filesystem we publish
+FROM registry.access.redhat.com/ubi9/ubi:latest AS rebased
+
 USER 0
-
-# This is the directory ansible-operator expects to run from
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# ---- Patch OS packages to pull in latest security errata available at build time ----
-# (Helps reduce CVEs in base packages like curl/expat/gnutls/krb5/etc.)
+# Repo hygiene: keep UBI repos only
 RUN set -eux; \
-    if command -v microdnf >/dev/null 2>&1; then \
-      mkdir -p /var/cache/yum /var/tmp; \
-      microdnf -y update; \
-      microdnf -y clean all; \
-      rm -rf /var/cache/yum /var/tmp/* /tmp/*; \
-    elif command -v dnf >/dev/null 2>&1; then \
-      dnf -y update; \
-      dnf -y clean all; \
-      rm -rf /var/cache/dnf /var/tmp/* /tmp/*; \
-    elif command -v yum >/dev/null 2>&1; then \
-      yum -y update; \
-      yum -y clean all; \
-      rm -rf /var/cache/yum /var/tmp/* /tmp/*; \
-    else \
-      echo "WARN: No package manager found to apply updates." >&2; \
-    fi
+    rm -f /etc/yum.repos.d/redhat.repo || true; \
+    rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# ---- Required certification labels (edit values to match your project) ----
+# Enable UBI repos + install tooling INCLUDING ansible-core
+# NOTE: Do NOT install curl (curl-minimal already present and conflicts)
+RUN set -eux; \
+    dnf -y install dnf-plugins-core ca-certificates yum python3 python3-setuptools ansible-core; \
+    dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
+    dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
+    dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
+    dnf -y repolist; \
+    python3 --version; \
+    ansible-galaxy --version; \
+    dnf -y clean all; \
+    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
+# Patch UBI first
+RUN set -eux; \
+    dnf -y makecache --refresh; \
+    dnf -y update --security --refresh; \
+    dnf -y clean all; \
+    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
+# Create expected dirs
+RUN set -eux; \
+    mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator
+
+# Copy operator runtime bits from official base (keep it to /opt only)
+# This avoids dragging in wrappers that may not match UBI’s python/ansible.
+COPY --from=operator-src /opt/ /opt/
+
+# Required certification labels
 LABEL name="webserver-operator-dev" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
@@ -40,12 +60,12 @@ LABEL name="webserver-operator-dev" \
       summary="Kubernetes operator to deploy and manage web workloads" \
       description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
 
-# ---- Licensing for HasLicense check ----
-# Put a plain-text license/terms file under /licenses
+
+# Licensing
 RUN mkdir -p /licenses \
  && printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
-# ---- Install required Ansible collections ----
+# Install required Ansible collections (use UBI’s ansible-galaxy from ansible-core)
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
     ansible-galaxy collection install -r /tmp/requirements.yml \
@@ -53,21 +73,20 @@ RUN set -eux; \
     chmod -R g+rwX /opt/ansible/.ansible; \
     rm -f /tmp/requirements.yml
 
-# ---- Copy operator content ----
+# Copy operator content
 COPY watches.yaml ./watches.yaml
 COPY playbooks/ ./playbooks/
 COPY roles/ ./roles/
 
-# ---- OpenShift-friendly permissions ----
-# Allow arbitrary UID (restricted SCC) to write where it needs to.
+# OpenShift-friendly permissions (arbitrary UID)
 RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /opt/ansible/.ansible /licenses
 
-# ---- Run as a non-root user in image metadata (fixes RunAsNonRoot) ----
-# Use a fixed non-root numeric UID to satisfy preflight.
 USER 1001
-
-# If the base image expects ANSIBLE_USER_ID at runtime, keep it consistent:
 ENV ANSIBLE_USER_ID=1001
 
+# Final stage: publish the rebased UBI filesystem
+FROM rebased AS final
+USER 1001
+ENV ANSIBLE_USER_ID=1001
