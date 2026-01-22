@@ -4,8 +4,14 @@
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
+# -----------------------------------------------------------------------------
+# Stage 0: Source of ansible-operator binary + operator runtime bits (/opt)
+# -----------------------------------------------------------------------------
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
+# -----------------------------------------------------------------------------
+# Stage 1: Build the rebased filesystem we will publish (UBI 9)
+# -----------------------------------------------------------------------------
 FROM registry.access.redhat.com/ubi9/ubi:latest AS final
 
 USER 0
@@ -47,7 +53,7 @@ RUN set -eux; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # -----------------------------------------------------------------------------
-# 4) OpenShift-friendly dirs + callback plumbing
+# 4) OpenShift-friendly dirs + callback plumbing (force ansible_runner callback)
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -56,10 +62,12 @@ ENV HOME=/opt/ansible \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
     ANSIBLE_CALLBACK_PLUGINS=/usr/share/ansible/plugins/callback \
+    ANSIBLE_STDOUT_CALLBACK=ansible_runner \
     ANSIBLE_NOCOLOR=1 \
     ANSIBLE_FORCE_COLOR=0 \
     TERM=dumb \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_ROOT_USER_ACTION=ignore
 
 RUN set -eux; \
     mkdir -p \
@@ -71,7 +79,14 @@ RUN set -eux; \
       /licenses \
       ${ANSIBLE_OPERATOR_DIR}; \
     chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible; \
-    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible
+    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible; \
+    printf "%s\n" \
+      "[defaults]" \
+      "callback_plugins = /usr/share/ansible/plugins/callback" \
+      "stdout_callback = ansible_runner" \
+      "bin_ansible_callbacks = True" \
+      "nocows = 1" \
+      > /etc/ansible/ansible.cfg
 
 # -----------------------------------------------------------------------------
 # 5) Copy operator runtime bits from official OpenShift operator base
@@ -104,82 +119,33 @@ RUN set -eux; \
     /usr/local/bin/ansible-operator version
 
 # -----------------------------------------------------------------------------
-# 7) Install ansible-runner + k8s deps via pip
-#    Then: install runner callback plugin(s) WITHOUT heredocs (buildah-safe)
+# 7) Install ansible-runner (PINNED) + k8s deps via pip
+#    Then copy the expected callback plugin into a known callback path.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
     python3 -m pip install --no-cache-dir \
-      "ansible-runner>=2.3.6" \
+      "ansible-runner==2.3.6" \
       "kubernetes>=24.2.0" \
       "openshift>=0.13.2"; \
     python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
     ansible-runner --version; \
     \
-    mkdir -p /usr/share/ansible/plugins/callback /etc/ansible; \
+    # Copy the ansible_runner callback plugin to a standard path.
+    python3 -c "import os, shutil, ansible_runner; \
+pkg_dir=os.path.dirname(ansible_runner.__file__); \
+src=os.path.join(pkg_dir,'plugins','callback','ansible_runner.py'); \
+dst_dir='/usr/share/ansible/plugins/callback'; \
+os.makedirs(dst_dir, exist_ok=True); \
+print('Looking for callback at', src); \
+assert os.path.exists(src), 'ERROR: expected callback ansible_runner.py not found (pinning failed or layout differs)'; \
+shutil.copy2(src, os.path.join(dst_dir,'ansible_runner.py')); \
+print('Copied', src, 'to', dst_dir)"; \
     \
-    # Write callback installer script via base64 (no heredoc parsing issues)
-    python3 - <<'PY'
-import base64, textwrap
-script = r'''import os, glob, shutil, configparser
-import ansible_runner
-
-pkg_dir = os.path.dirname(ansible_runner.__file__)
-candidates = [
-    os.path.join(pkg_dir, "plugins", "callback"),
-    os.path.join(pkg_dir, "display_callback", "callback"),
-    os.path.join(pkg_dir, "interface", "callback"),
-]
-
-found = None
-pyfiles = []
-for d in candidates:
-    if os.path.isdir(d):
-        pyfiles = [p for p in glob.glob(os.path.join(d, "*.py")) if not p.endswith("__init__.py")]
-        if pyfiles:
-            found = d
-            break
-
-if not found:
-    raise SystemExit(f"ERROR: Could not find ansible-runner callback plugin directory. Tried: {candidates}")
-
-dst = "/usr/share/ansible/plugins/callback"
-os.makedirs(dst, exist_ok=True)
-
-for p in pyfiles:
-    shutil.copy2(p, os.path.join(dst, os.path.basename(p)))
-
-print("Copied callback plugin file(s) from", found, "to", dst)
-
-names = [os.path.splitext(os.path.basename(p))[0] for p in pyfiles]
-preferred = None
-for cand in ("ansible_runner", "runner", "awx_display", "display"):
-    if cand in names:
-        preferred = cand
-        break
-if not preferred:
-    preferred = sorted(names)[0]
-
-cfg_path = "/etc/ansible/ansible.cfg"
-os.makedirs("/etc/ansible", exist_ok=True)
-with open(cfg_path, "w") as f:
-    f.write("[defaults]\\n")
-    f.write("callback_plugins = /usr/share/ansible/plugins/callback\\n")
-    f.write(f"stdout_callback = {preferred}\\n")
-    f.write("bin_ansible_callbacks = True\\n")
-    f.write("nocows = 1\\n")
-
-print("Configured stdout_callback =", preferred)
-
-cfg = configparser.ConfigParser()
-cfg.read(cfg_path)
-print("Sanity check: stdout_callback =", cfg.get("defaults", "stdout_callback", fallback=""))
-'''
-b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
-print(b64)
-PY
-
-
+    # Sanity: confirm Ansible can load the callback
+    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
+    dnf -y clean all || true; \
+    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # -----------------------------------------------------------------------------
 # 8) Required certification labels + NOTICE
