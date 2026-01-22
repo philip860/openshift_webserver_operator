@@ -18,6 +18,10 @@
 # Option A applied:
 #   - DO NOT copy a non-existent /usr/local/bin/entrypoint from operator-src
 #   - Create our OWN tiny entrypoint shim that execs ansible-operator
+#
+# IMPORTANT CHANGE:
+#   - Install ansible-runner + kubernetes/openshift Python libs into a venv
+#   - Export ANSIBLE_PYTHON_INTERPRETER so Ansible uses that venv by default
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -65,18 +69,22 @@ RUN set -eux; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # -----------------------------------------------------------------------------
-# 2b) Install ansible-runner (required by ansible-operator) via pip in a venv
-#     Keep it isolated and put it on PATH.
+# 2b) Python venv for runtime libs (ansible-runner + kubernetes client libs)
+#     Put it on PATH AND tell Ansible to use this interpreter by default.
 # -----------------------------------------------------------------------------
 ENV VENV_DIR=/opt/ansible/venv
 ENV PATH="${VENV_DIR}/bin:${PATH}"
+ENV ANSIBLE_PYTHON_INTERPRETER="${VENV_DIR}/bin/python"
 
 RUN set -eux; \
     python3 -m venv "${VENV_DIR}"; \
     "${VENV_DIR}/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
     "${VENV_DIR}/bin/python" -m pip install --no-cache-dir \
-      "ansible-runner>=2.3.6"; \
-    ansible-runner --version
+      "ansible-runner>=2.3.6" \
+      "kubernetes>=24.2.0" \
+      "openshift>=0.13.2"; \
+    ansible-runner --version; \
+    "${VENV_DIR}/bin/python" -c "import kubernetes, openshift; print('python deps OK (venv)')"
 
 # -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
@@ -148,26 +156,7 @@ RUN set -eux; \
     /usr/local/bin/ansible-operator version
 
 # -----------------------------------------------------------------------------
-# 7) Install Python libraries required by kubernetes.core modules
-#    Fixes: "Failed to import the required Python library (kubernetes)"
-#    Try RPMs first; if not available in UBI repos, fall back to pip (in the venv).
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    if dnf -y install python3-kubernetes python3-openshift; then \
-      echo "Installed kubernetes/openshift via RPMs"; \
-      python3 -c "import kubernetes, openshift; print('python deps OK (system)')"; \
-    else \
-      echo "RPMs not available; installing via pip (venv)"; \
-      "${VENV_DIR}/bin/python" -m pip install --no-cache-dir \
-        "kubernetes>=24.2.0" \
-        "openshift>=0.13.2"; \
-      "${VENV_DIR}/bin/python" -c "import kubernetes, openshift; print('python deps OK (venv)')"; \
-    fi; \
-    dnf -y clean all || true; \
-    rm -rf /var/cache/dnf /var/tmp/* /tmp/*
-
-# -----------------------------------------------------------------------------
-# 8) Required certification labels + NOTICE
+# 7) Required certification labels + NOTICE
 # -----------------------------------------------------------------------------
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
@@ -182,7 +171,7 @@ RUN set -eux; \
     printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
 # -----------------------------------------------------------------------------
-# 9) Operator content + collections
+# 8) Operator content + collections
 # -----------------------------------------------------------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
@@ -204,7 +193,7 @@ RUN set -eux; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses
 
 # -----------------------------------------------------------------------------
-# 10) Option A: Provide our own tiny entrypoint shim
+# 9) Provide our own tiny entrypoint shim
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     cat > /usr/local/bin/entrypoint <<'EOF'
@@ -217,7 +206,7 @@ EOF
 RUN chmod +x /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
-# 11) Drop to non-root for OpenShift
+# 10) Drop to non-root for OpenShift
 # -----------------------------------------------------------------------------
 USER 1001
 ENV ANSIBLE_USER_ID=1001
