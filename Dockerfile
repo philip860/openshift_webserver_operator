@@ -5,12 +5,12 @@
 # -----------------------------------------------------------------------------
 # Stage 0: official operator base (source of runtime bits for rebased)
 # -----------------------------------------------------------------------------
-FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:440d3e4711ebd68f14e1e1575b757db4d202850070f0f634dc5c6cab89d02e7b AS operator-src
+FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@:latest AS operator-src
 
 # -----------------------------------------------------------------------------
 # Stage 1: basepatched (patch in-place on the official base)
 # -----------------------------------------------------------------------------
-FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:440d3e4711ebd68f14e1e1575b757db4d202850070f0f634dc5c6cab89d02e7b AS basepatched
+FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@sha256:latest AS basepatched
 
 USER 0
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
