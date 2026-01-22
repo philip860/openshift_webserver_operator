@@ -54,6 +54,9 @@ RUN set -eux; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
+# Silence pip "root" warnings during image builds
+ENV PIP_ROOT_USER_ACTION=ignore
+
 # -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
 # -----------------------------------------------------------------------------
@@ -87,10 +90,15 @@ COPY --from=operator-src /opt/ /opt/
 COPY --from=operator-src /etc/ansible/ /etc/ansible/
 # NOTE: operator-src does NOT always ship /usr/share/ansible, so do not copy it.
 # COPY --from=operator-src /usr/share/ansible/ /usr/share/ansible/
+
+# Stash operator-src content under /tmp so we can extract only what we need
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
 COPY --from=operator-src /usr/local/lib/ /tmp/operator-src/usr-local-lib/
 COPY --from=operator-src /usr/local/lib64/ /tmp/operator-src/usr-local-lib64/
+# (often needed for RPM-installed python libs)
+COPY --from=operator-src /usr/lib/ /tmp/operator-src/usr-lib/
+COPY --from=operator-src /usr/lib64/ /tmp/operator-src/usr-lib64/
 
 # -----------------------------------------------------------------------------
 # 7) Install ansible-operator binary from operator-src (robust)
@@ -108,9 +116,9 @@ RUN set -eux; \
     fi; \
     /usr/local/bin/ansible-operator version
 
-
 # -----------------------------------------------------------------------------
 # 7b) Install ansible-runner CLI from operator-src so the operator can exec it
+#     IMPORTANT: Do NOT run it here (ansible_runner python module isn't present yet).
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     if [ -x /tmp/operator-src/usr-local-bin/ansible-runner ]; then \
@@ -123,24 +131,23 @@ RUN set -eux; \
       ls -la /tmp/operator-src/usr-bin || true; \
       exit 1; \
     fi; \
-    /usr/local/bin/ansible-runner --version
-
+    chmod 0755 /usr/local/bin/ansible-runner; \
+    head -n 5 /usr/local/bin/ansible-runner || true
 
 # -----------------------------------------------------------------------------
-# 8) Copy the *exact* site-packages for ansible + ansible_runner from operator-src
+# 8) Copy the site-packages for ansible + ansible_runner from operator-src
 #    into this rebased image’s current python3 site-packages.
 #
-#    IMPORTANT FIXES:
-#    - Do NOT hardcode python3.12 paths (may fall back to python3)
-#    - Do NOT hardcode operator-src python3.12 site-packages paths
-#    - Install missing deps required by copied stack (pexpect, PyYAML, python-daemon, etc.)
+#    FIXES:
+#    - Choose the site-packages directory that actually contains ansible + runner
+#    - Install missing deps required by copied stack
+#    - Verify ansible-runner CLI AFTER modules exist
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     DEST_SITEPKG="$("/usr/local/bin/python3" -c 'import site; print(site.getsitepackages()[0])')"; \
     echo "DEST_SITEPKG=${DEST_SITEPKG}"; \
     mkdir -p "${DEST_SITEPKG}"; \
     \
-    # Find the operator-src site-packages that *actually contains* ansible and runner
     SRC_SITEPKG="$( \
       find /tmp/operator-src -type d -name site-packages -print 2>/dev/null \
       | while read -r d; do \
@@ -163,8 +170,9 @@ RUN set -eux; \
     cp -a "${SRC_SITEPKG}"/ansible-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     cp -a "${SRC_SITEPKG}"/ansible_runner-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     \
-    /usr/local/bin/python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
-    /usr/local/bin/python3 -m pip install --no-cache-dir \
+    # Upgrade pip tooling + install deps in ONE transaction (avoids resolver warning noise)
+    /usr/local/bin/python3 -m pip install --no-cache-dir --upgrade \
+      pip setuptools wheel \
       "pexpect>=4.8.0" \
       "ptyprocess>=0.7.0" \
       "PyYAML>=6.0" \
@@ -175,9 +183,10 @@ RUN set -eux; \
       "resolvelib" \
       "cryptography"; \
     \
+    /usr/local/bin/python3 -m pip check; \
     /usr/local/bin/python3 -c "import pexpect, ptyprocess, yaml, daemon, lockfile, jinja2, packaging, resolvelib, cryptography; print('OK deps')"; \
-    /usr/local/bin/python3 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"
-
+    /usr/local/bin/python3 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"; \
+    /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
 # 9) Clean temp copies
@@ -195,8 +204,7 @@ ENV HOME=/opt/ansible \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
     ANSIBLE_PYTHON_INTERPRETER=/usr/local/bin/python3 \
-    PYTHONUNBUFFERED=1 \
-    PIP_ROOT_USER_ACTION=ignore
+    PYTHONUNBUFFERED=1
 
 # -----------------------------------------------------------------------------
 # 11) Required certification labels + NOTICE
