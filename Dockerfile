@@ -3,10 +3,10 @@
 #
 # Fixes included:
 # - Robustly locate python site-packages for ansible/ansible_runner in operator-src
-#   (paths vary: /usr/lib64, /usr/local, etc.) and transplant into final image.
-# - Robustly copy required binaries from operator-src (/usr/local/bin vs /usr/bin).
-# - Do NOT pip install ansible-runner; do NOT force stdout_callback.
-# - UBI9 base + dnf update --security for scan/CVE reduction.
+# - Robustly copy required binaries from operator-src (/usr/local/bin vs /usr/bin)
+# - Install missing runtime deps in UBI: python3-importlib-metadata (+ python3-zipp)
+# - Do NOT pip install ansible-runner; do NOT force stdout_callback
+# - UBI9 base + dnf update --security for scan/CVE reduction
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -49,11 +49,14 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
 # Minimal runtime deps only (NO ansible-core, NO ansible-runner via pip)
+# IMPORTANT: include python3-importlib-metadata (+ python3-zipp) for ansible_runner
 # Avoid installing curl to prevent curl vs curl-minimal conflicts.
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates \
-      python3 python3-pyyaml python3-jinja2 python3-cryptography python3-requests python3-six \
+      python3 \
+      python3-pyyaml python3-jinja2 python3-cryptography python3-requests python3-six \
       python3-pexpect \
+      python3-importlib-metadata python3-zipp \
       tar gzip findutils which shadow-utils; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
@@ -94,7 +97,6 @@ RUN set -eux; \
 COPY --from=operator-src /opt/ /opt/
 
 # Copy /usr from operator-src into temp so we can locate python modules regardless of layout
-# (operator-src may use /usr/lib64 or /usr/local, etc.)
 COPY --from=operator-src /usr/ /tmp/operator-src/usr/
 
 # Transplant ansible + ansible_runner python modules from operator-src into this image
@@ -121,21 +123,18 @@ RUN set -eux; \
       exit 1; \
     fi; \
     \
-    # Copy modules
     cp -a "$ANSIBLE_DIR" /usr/lib/python3.9/site-packages/; \
     cp -a "$RUNNER_DIR" /usr/lib/python3.9/site-packages/; \
     \
-    # Copy dist-info metadata if present (helps tooling)
     if [ -n "$SITEPKG_BASE" ]; then \
       cp -a "$SITEPKG_BASE"/ansible-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
       cp -a "$SITEPKG_BASE"/ansible_runner-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
     fi; \
     \
-    # Cleanup temp /usr copy
     rm -rf /tmp/operator-src/usr /tmp/sitepkgs.txt; \
     \
-    # Sanity check
-    python3 -c "import ansible, ansible_runner; print('ansible:', ansible.__file__); print('ansible_runner:', ansible_runner.__file__)"
+    # Sanity check (importlib_metadata must exist now)
+    python3 -c "import importlib_metadata; import ansible, ansible_runner; print('importlib_metadata OK'); print('ansible:', ansible.__file__); print('ansible_runner:', ansible_runner.__file__)"
 
 # Bring over candidate bin dirs from operator-src (paths vary by image build)
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
