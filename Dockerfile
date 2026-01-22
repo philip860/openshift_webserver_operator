@@ -149,12 +149,22 @@ RUN set -eux; \
       cp -a "${SRC_SITEPKG}"/zipp-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     fi; \
     \
-    # FIX: copied ansible stack expects pexpect (and ptyprocess). Install into py3.12 site-packages.
+    # FIX: copied ansible stack expects extra runtime deps. Install into py3.12 site-packages.
     /usr/bin/python3.12 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
-    /usr/bin/python3.12 -m pip install --no-cache-dir "pexpect>=4.8.0" "ptyprocess>=0.7.0" "PyYAML>=6.0"; \
+    /usr/bin/python3.12 -m pip install --no-cache-dir \
+      "pexpect>=4.8.0" \
+      "ptyprocess>=0.7.0" \
+      "PyYAML>=6.0" \
+      "python-daemon>=3.0.1" \
+      "lockfile>=0.12.2" \
+      "jinja2>=3.1" \
+      "packaging" \
+      "resolvelib" \
+      "cryptography"; \
     \
-    /usr/bin/python3.12 -c "import pexpect, ptyprocess; print('OK deps:', pexpect.__version__)"; \
+    /usr/bin/python3.12 -c "import pexpect, ptyprocess, yaml, daemon, lockfile, jinja2, packaging, resolvelib, cryptography; print('OK deps')"; \
     /usr/bin/python3.12 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"
+
 
 # -----------------------------------------------------------------------------
 # 9) Clean temp copies
