@@ -1,61 +1,31 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator (Ansible Operator) - Path B (Rebased UBI, Red Hat scan-friendly)
-#
-# GOALS
-#   1) Publish a UBI-based image (ubi9/ubi) that passes Red Hat security scans.
-#   2) Keep core operator functionality:
-#        - run ansible-operator
-#        - read watches.yaml from /opt/ansible-operator
-#        - respect CSV/env vars (WATCH_NAMESPACE, OPERATOR_NAME, etc.)
-#   3) Avoid repo mixing + curl conflicts:
-#        - remove redhat.repo
-#        - do NOT install curl (curl-minimal is already present and conflicts)
-#   4) Fix common runtime failures:
-#        - arbitrary UID permissions (OpenShift SCC)
-#        - ansible-runner required by ansible-operator
-#        - kubernetes/openshift python libs needed by kubernetes.core modules
-#        - ensure ansible output goes to pod logs
-#
-# CORE FIX IN THIS VERSION:
-#   - install ansible-runner + kubernetes + openshift into a venv
-#   - force Ansible to use the venv interpreter via /etc/ansible/ansible.cfg
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
-# -----------------------------------------------------------------------------
-# Stage 0: Source of ansible-operator binary + operator runtime bits (/opt)
-# -----------------------------------------------------------------------------
+# Stage 0: grab operator runtime bits from official OCP base
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
-# -----------------------------------------------------------------------------
-# Stage 1: Build the rebased filesystem we will publish (UBI 9)
-# -----------------------------------------------------------------------------
+# Stage 1: final image on UBI 9
 FROM registry.access.redhat.com/ubi9/ubi:latest AS final
 
 USER 0
 
-# Where the ansible-operator base expects operator content
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# -----------------------------------------------------------------------------
-# 1) Repo hygiene: keep ONLY UBI repos
-# -----------------------------------------------------------------------------
+# 1) Repo hygiene
 RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# -----------------------------------------------------------------------------
-# 2) Install minimal tooling (ansible-core + python)
-# -----------------------------------------------------------------------------
+# 2) Base tooling
+# NOTE: no python3-virtualenv package (not in these repos)
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum \
       python3 python3-setuptools python3-pip \
       ansible-core; \
-    dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
-    dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
-    dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y repolist; \
     python3 --version; \
     ansible --version; \
@@ -63,58 +33,30 @@ RUN set -eux; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# -----------------------------------------------------------------------------
-# 2b) Python venv for runtime libs (ansible-runner + kubernetes client libs)
-#     Put it on PATH.
-# -----------------------------------------------------------------------------
-ENV VENV_DIR=/opt/ansible/venv
-ENV PATH="${VENV_DIR}/bin:${PATH}"
-
-RUN set -eux; \
-    python3 -m venv "${VENV_DIR}"; \
-    "${VENV_DIR}/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
-    "${VENV_DIR}/bin/python" -m pip install --no-cache-dir \
-      "ansible-runner>=2.3.6" \
-      "kubernetes>=24.2.0" \
-      "openshift>=0.13.2"; \
-    ansible-runner --version; \
-    "${VENV_DIR}/bin/python" -c "import kubernetes, openshift; print('python deps OK (venv)')"
-
-# -----------------------------------------------------------------------------
-# 2c) FORCE Ansible to use the venv interpreter
-#     This fixes: Failed to import Python library (kubernetes) on /usr/bin/python3
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    mkdir -p /etc/ansible; \
-    cat > /etc/ansible/ansible.cfg <<EOF
-[defaults]
-stdout_callback = default
-callbacks_enabled =
-host_key_checking = False
-retry_files_enabled = False
-# Critical: make modules run with the venv python
-interpreter_python = ${VENV_DIR}/bin/python
-EOF
-
-# -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
-# -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y makecache --refresh; \
     dnf -y update --security --refresh; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# -----------------------------------------------------------------------------
-# 4) Create expected dirs + OpenShift-friendly HOME/Ansible dirs
-# -----------------------------------------------------------------------------
+# 4) Install python deps REQUIRED BY YOUR PLAYBOOKS into SYSTEM PYTHON.
+# This is the key fix because your logs show Ansible is using /usr/bin/python3.
+RUN set -eux; \
+    python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
+    python3 -m pip install --no-cache-dir \
+      "ansible-runner>=2.3.6" \
+      "kubernetes>=24.2.0" \
+      "openshift>=0.13.2"; \
+    python3 -c "import kubernetes, openshift; print('system python deps OK')" ; \
+    ansible-runner --version
+
+# 5) OpenShift-friendly HOME/Ansible dirs
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
     ANSIBLE_REMOTE_TEMP=/opt/ansible/.ansible/tmp \
     ANSIBLE_COLLECTIONS_PATHS=/opt/ansible/.ansible/collections:/usr/share/ansible/collections \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
-    ANSIBLE_STDOUT_CALLBACK=default \
-    ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
     ANSIBLE_FORCE_COLOR=0 \
     PYTHONUNBUFFERED=1
 
@@ -128,14 +70,20 @@ RUN set -eux; \
     chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR}; \
     chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR}
 
-# -----------------------------------------------------------------------------
-# 5) Copy operator runtime bits from official OpenShift operator base
-# -----------------------------------------------------------------------------
+# 6) Ansible config (don’t set empty callbacks; keep it simple)
+RUN set -eux; \
+    mkdir -p /etc/ansible; \
+    cat > /etc/ansible/ansible.cfg <<'EOF'
+[defaults]
+stdout_callback = default
+host_key_checking = False
+retry_files_enabled = False
+EOF
+
+# 7) Copy runtime bits from official OpenShift operator base
 COPY --from=operator-src /opt/ /opt/
 
-# -----------------------------------------------------------------------------
-# 6) Copy ansible-operator binary from operator-src (robust)
-# -----------------------------------------------------------------------------
+# 8) Copy ansible-operator binary robustly
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
 
@@ -153,9 +101,7 @@ RUN set -eux; \
     rm -rf /tmp/operator-src; \
     /usr/local/bin/ansible-operator version
 
-# -----------------------------------------------------------------------------
-# 7) Required certification labels + NOTICE
-# -----------------------------------------------------------------------------
+# 9) Labels + NOTICE
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
@@ -168,9 +114,7 @@ RUN set -eux; \
     mkdir -p /licenses; \
     printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
-# -----------------------------------------------------------------------------
-# 8) Operator content + collections
-# -----------------------------------------------------------------------------
+# 10) Operator content + collections
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
     if [ -s /tmp/requirements.yml ]; then \
@@ -189,9 +133,7 @@ RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses
 
-# -----------------------------------------------------------------------------
-# 9) Provide our own tiny entrypoint shim
-# -----------------------------------------------------------------------------
+# 11) Entrypoint shim
 RUN set -eux; \
     cat > /usr/local/bin/entrypoint <<'EOF'
 #!/bin/sh
@@ -200,9 +142,7 @@ exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/wa
 EOF
 RUN chmod +x /usr/local/bin/entrypoint
 
-# -----------------------------------------------------------------------------
-# 10) Drop to non-root for OpenShift
-# -----------------------------------------------------------------------------
+# 12) Drop to non-root
 USER 1001
 ENV ANSIBLE_USER_ID=1001
 
