@@ -27,7 +27,7 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
 # -----------------------------------------------------------------------------
-# 2) Install minimal tooling INCLUDING ansible-core (no python3-virtualenv)
+# 2) Install minimal tooling INCLUDING ansible-core
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum \
@@ -53,8 +53,8 @@ RUN set -eux; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # -----------------------------------------------------------------------------
-# 4) OpenShift-friendly dirs + runner settings
-#    IMPORTANT: Do NOT force ANSIBLE_STDOUT_CALLBACK=ansible_runner globally.
+# 4) OpenShift-friendly dirs + IMPORTANT runner/callback settings
+#    We explicitly wire the ansible_runner callback so playbook_on_stats is emitted.
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -62,6 +62,11 @@ ENV HOME=/opt/ansible \
     ANSIBLE_COLLECTIONS_PATHS=/opt/ansible/.ansible/collections:/usr/share/ansible/collections \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
+    ANSIBLE_CALLBACK_PLUGINS=/usr/share/ansible/plugins/callback \
+    ANSIBLE_STDOUT_CALLBACK=ansible_runner \
+    ANSIBLE_NOCOLOR=1 \
+    ANSIBLE_FORCE_COLOR=0 \
+    TERM=dumb \
     PYTHONUNBUFFERED=1
 
 RUN set -eux; \
@@ -69,10 +74,22 @@ RUN set -eux; \
       /opt/ansible/.ansible/tmp \
       /opt/ansible/.ansible/collections \
       /opt/ansible/.ansible/roles \
+      /usr/share/ansible/plugins/callback \
+      /etc/ansible \
       /licenses \
       ${ANSIBLE_OPERATOR_DIR}; \
-    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR}; \
-    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR}
+    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible; \
+    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible
+
+# Provide a deterministic Ansible config that matches our env vars
+RUN set -eux; \
+    printf "%s\n" \
+      "[defaults]" \
+      "callback_plugins = /usr/share/ansible/plugins/callback" \
+      "stdout_callback = ansible_runner" \
+      "bin_ansible_callbacks = True" \
+      "nocows = 1" \
+      > /etc/ansible/ansible.cfg
 
 # -----------------------------------------------------------------------------
 # 5) Copy operator runtime bits from official OpenShift operator base
@@ -105,7 +122,8 @@ RUN set -eux; \
     /usr/local/bin/ansible-operator version
 
 # -----------------------------------------------------------------------------
-# 7) Install ansible-runner + k8s deps via pip (NO callback copying)
+# 7) Install ansible-runner + k8s deps via pip
+#    Then: locate & install the ansible_runner callback plugin deterministically.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
@@ -113,10 +131,52 @@ RUN set -eux; \
       "ansible-runner>=2.3.6" \
       "kubernetes>=24.2.0" \
       "openshift>=0.13.2"; \
-    python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
+    python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK:', ansible_runner.__version__)"; \
     ansible-runner --version; \
-    mkdir -p /etc/ansible; \
-    printf "[defaults]\n# keep defaults; operator/runner handles eventing\n" > /etc/ansible/ansible.cfg; \
+    \
+    # Find callback plugin directory inside ansible_runner (varies by version),
+    # then copy callback .py files into /usr/share/ansible/plugins/callback
+    python3 - <<'PY'
+import os, shutil, glob
+import ansible_runner
+
+pkg_dir = os.path.dirname(ansible_runner.__file__)
+candidates = [
+    os.path.join(pkg_dir, "plugins", "callback"),
+    os.path.join(pkg_dir, "display_callback", "callback"),
+    os.path.join(pkg_dir, "interface", "callback"),
+]
+
+found = None
+for d in candidates:
+    if os.path.isdir(d):
+        pyfiles = [p for p in glob.glob(os.path.join(d, "*.py"))]
+        if pyfiles:
+            found = d
+            break
+
+if not found:
+    raise SystemExit(f"ERROR: Could not find ansible-runner callback plugin directory. Tried: {candidates}")
+
+dst = "/usr/share/ansible/plugins/callback"
+os.makedirs(dst, exist_ok=True)
+
+copied = 0
+for p in glob.glob(os.path.join(found, "*.py")):
+    shutil.copy2(p, os.path.join(dst, os.path.basename(p)))
+    copied += 1
+
+print(f"Copied {copied} callback plugin file(s) from {found} to {dst}")
+
+# Ensure the ansible_runner callback exists after copy (name must match stdout_callback)
+if not os.path.exists(os.path.join(dst, "ansible_runner.py")):
+    # Some releases name it differently; fail hard because operator expects playbook_on_stats.
+    # If this triggers, we can adapt to the present filename(s) in your build output.
+    raise SystemExit("ERROR: ansible_runner.py callback not found in copied plugins; cannot set stdout_callback=ansible_runner")
+PY
+    \
+    # Sanity: confirm Ansible can load the callback plugin we just installed
+    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
@@ -129,7 +189,7 @@ LABEL name="webserver-operator" \
       version="1.0.35" \
       release="1" \
       summary="Kubernetes operator to deploy and manage web workloads" \
-      description="An Anible-based operator that manages web workload deployments on OpenShift/Kubernetes."
+      description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
 
 RUN set -eux; \
     mkdir -p /licenses; \
@@ -153,8 +213,8 @@ COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
 COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
 
 RUN set -eux; \
-    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses; \
-    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses
+    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /usr/share/ansible/plugins /etc/ansible; \
+    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /usr/share/ansible/plugins /etc/ansible
 
 # -----------------------------------------------------------------------------
 # 10) Entrypoint shim
