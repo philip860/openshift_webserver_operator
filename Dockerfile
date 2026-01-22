@@ -151,7 +151,7 @@ RUN set -eux; \
     \
     # FIX: copied ansible stack expects pexpect (and ptyprocess). Install into py3.12 site-packages.
     /usr/bin/python3.12 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
-    /usr/bin/python3.12 -m pip install --no-cache-dir "pexpect>=4.8.0" "ptyprocess>=0.7.0"; \
+    /usr/bin/python3.12 -m pip install --no-cache-dir "pexpect>=4.8.0" "ptyprocess>=0.7.0" "PyYAML>=6.0"; \
     \
     /usr/bin/python3.12 -c "import pexpect, ptyprocess; print('OK deps:', pexpect.__version__)"; \
     /usr/bin/python3.12 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"
