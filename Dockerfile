@@ -73,9 +73,8 @@ RUN set -eux; \
     echo "${sitepk}" > "/usr/lib/python${pyver}/site-packages/zz_opt_pip_sitepackages.pth"; \
     printf '%s\n' '#!/bin/sh' 'exec /usr/bin/python3 -m ansible_runner "$@"' > /usr/local/bin/ansible-runner; \
     chmod +x /usr/local/bin/ansible-runner; \
-    /usr/local/bin/ansible-runner --version; \
-    /usr/bin/python3 -c 'import ansible_runner; print("ansible_runner import OK:", ansible_runner.__version__)'
-
+    /usr/local/bin/ansible-runner --version
+    
 # Certification labels
 LABEL name="webserver-operator-dev" \
       vendor="Duncan Networks" \
