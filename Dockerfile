@@ -12,16 +12,13 @@
 #        - do NOT install curl (curl-minimal is already present and conflicts)
 #   4) Fix common runtime failures:
 #        - arbitrary UID permissions (OpenShift SCC)
+#        - ansible-runner required by ansible-operator
 #        - kubernetes/openshift python libs needed by kubernetes.core modules
 #        - ensure ansible output goes to pod logs
 #
-# Option A applied:
-#   - DO NOT copy a non-existent /usr/local/bin/entrypoint from operator-src
-#   - Create our OWN tiny entrypoint shim that execs ansible-operator
-#
-# IMPORTANT CHANGE:
-#   - Install ansible-runner + kubernetes/openshift Python libs into a venv
-#   - Export ANSIBLE_PYTHON_INTERPRETER so Ansible uses that venv by default
+# CORE FIX IN THIS VERSION:
+#   - install ansible-runner + kubernetes + openshift into a venv
+#   - force Ansible to use the venv interpreter via /etc/ansible/ansible.cfg
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -44,15 +41,13 @@ WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
 # -----------------------------------------------------------------------------
 # 1) Repo hygiene: keep ONLY UBI repos
-#    (avoid rhel-9-for-* repo mixing and scan noise)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
 # -----------------------------------------------------------------------------
-# 2) Install minimal tooling INCLUDING ansible-core so ansible-galaxy works natively
-#    NOTE: Do NOT install curl (curl-minimal already present and conflicts)
+# 2) Install minimal tooling (ansible-core + python)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum \
@@ -70,11 +65,10 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 2b) Python venv for runtime libs (ansible-runner + kubernetes client libs)
-#     Put it on PATH AND tell Ansible to use this interpreter by default.
+#     Put it on PATH.
 # -----------------------------------------------------------------------------
 ENV VENV_DIR=/opt/ansible/venv
 ENV PATH="${VENV_DIR}/bin:${PATH}"
-ENV ANSIBLE_PYTHON_INTERPRETER="${VENV_DIR}/bin/python"
 
 RUN set -eux; \
     python3 -m venv "${VENV_DIR}"; \
@@ -87,6 +81,22 @@ RUN set -eux; \
     "${VENV_DIR}/bin/python" -c "import kubernetes, openshift; print('python deps OK (venv)')"
 
 # -----------------------------------------------------------------------------
+# 2c) FORCE Ansible to use the venv interpreter
+#     This fixes: Failed to import Python library (kubernetes) on /usr/bin/python3
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    mkdir -p /etc/ansible; \
+    cat > /etc/ansible/ansible.cfg <<EOF
+[defaults]
+stdout_callback = default
+callbacks_enabled =
+host_key_checking = False
+retry_files_enabled = False
+# Critical: make modules run with the venv python
+interpreter_python = ${VENV_DIR}/bin/python
+EOF
+
+# -----------------------------------------------------------------------------
 # 3) Patch UBI packages (security errata)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
@@ -97,15 +107,12 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 4) Create expected dirs + OpenShift-friendly HOME/Ansible dirs
-#    - OpenShift runs containers with arbitrary UID in many cases.
-#    - We keep everything writable by group 0.
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
     ANSIBLE_REMOTE_TEMP=/opt/ansible/.ansible/tmp \
     ANSIBLE_COLLECTIONS_PATHS=/opt/ansible/.ansible/collections:/usr/share/ansible/collections \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
-    # Log/console behavior:
     ANSIBLE_STDOUT_CALLBACK=default \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
     ANSIBLE_FORCE_COLOR=0 \
@@ -123,21 +130,12 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 5) Copy operator runtime bits from official OpenShift operator base
-#    IMPORTANT: keep to /opt only (your prior scan-friendly approach)
 # -----------------------------------------------------------------------------
 COPY --from=operator-src /opt/ /opt/
 
 # -----------------------------------------------------------------------------
-# 6) Copy ansible-operator binary from operator-src
-#    Different builds may place it in /usr/local/bin or /usr/bin.
-#    We detect and copy the right one *without* guessing.
+# 6) Copy ansible-operator binary from operator-src (robust)
 # -----------------------------------------------------------------------------
-RUN set -eux; \
-    if [ -x /usr/local/bin/ansible-operator ]; then \
-      echo "ansible-operator already exists in this image (unexpected)"; \
-    fi
-
-# COPY cannot be conditional; copy both dirs then install only the binary if found.
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
 
@@ -187,7 +185,6 @@ COPY watches.yaml ${ANSIBLE_OPERATOR_DIR}/watches.yaml
 COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
 COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
 
-# Ensure operator dir readable/writable for random UID (group 0)
 RUN set -eux; \
     chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses
@@ -199,8 +196,6 @@ RUN set -eux; \
     cat > /usr/local/bin/entrypoint <<'EOF'
 #!/bin/sh
 set -eu
-# Run the operator using the watches file packaged into the image.
-# Env vars injected by the CSV (WATCH_NAMESPACE, POD_NAME, etc.) are still honored.
 exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml
 EOF
 RUN chmod +x /usr/local/bin/entrypoint
