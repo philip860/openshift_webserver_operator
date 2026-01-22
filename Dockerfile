@@ -52,21 +52,21 @@ RUN set -eux; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# (C) Offline/local RPM patching (./patching/*.rpm)
-COPY patching/ /tmp/patching/
-RUN set -eux; \
-    echo "=== Offline/local patching (if RPMs present) ==="; \
-    ls -lah /tmp/patching || true; \
-    rpms="$(ls -1 /tmp/patching/*.rpm 2>/dev/null || true)"; \
-    if [ -n "${rpms}" ]; then \
-      echo "Installing local RPMs:"; \
-      echo "${rpms}" | sed 's/^/  - /'; \
-      yum -y localinstall /tmp/patching/*.rpm; \
-    else \
-      echo "No RPMs found in /tmp/patching (skipping yum localinstall)."; \
-    fi; \
-    yum -y clean all; \
-    rm -rf /var/cache/dnf /var/cache/yum /tmp/patching /var/tmp/* /tmp/*
+# # (C) Offline/local RPM patching (./patching/*.rpm)
+# COPY patching/ /tmp/patching/
+# RUN set -eux; \
+#     echo "=== Offline/local patching (if RPMs present) ==="; \
+#     ls -lah /tmp/patching || true; \
+#     rpms="$(ls -1 /tmp/patching/*.rpm 2>/dev/null || true)"; \
+#     if [ -n "${rpms}" ]; then \
+#       echo "Installing local RPMs:"; \
+#       echo "${rpms}" | sed 's/^/  - /'; \
+#       yum -y localinstall /tmp/patching/*.rpm; \
+#     else \
+#       echo "No RPMs found in /tmp/patching (skipping yum localinstall)."; \
+#     fi; \
+#     yum -y clean all; \
+#     rm -rf /var/cache/dnf /var/cache/yum /tmp/patching /var/tmp/* /tmp/*
 
 # Post-patch verification (non-fatal)
 RUN set -eux; \
