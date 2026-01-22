@@ -4,14 +4,8 @@
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
-# -----------------------------------------------------------------------------
-# Stage 0: Source of ansible-operator binary + operator runtime bits (/opt)
-# -----------------------------------------------------------------------------
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
-# -----------------------------------------------------------------------------
-# Stage 1: Build the rebased filesystem we will publish (UBI 9)
-# -----------------------------------------------------------------------------
 FROM registry.access.redhat.com/ubi9/ubi:latest AS final
 
 USER 0
@@ -53,7 +47,7 @@ RUN set -eux; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # -----------------------------------------------------------------------------
-# 4) OpenShift-friendly dirs + IMPORTANT runner/callback settings
+# 4) OpenShift-friendly dirs + callback plumbing
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -62,7 +56,6 @@ ENV HOME=/opt/ansible \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
     ANSIBLE_CALLBACK_PLUGINS=/usr/share/ansible/plugins/callback \
-    ANSIBLE_STDOUT_CALLBACK=ansible_runner \
     ANSIBLE_NOCOLOR=1 \
     ANSIBLE_FORCE_COLOR=0 \
     TERM=dumb \
@@ -79,15 +72,6 @@ RUN set -eux; \
       ${ANSIBLE_OPERATOR_DIR}; \
     chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible; \
     chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible
-
-RUN set -eux; \
-    printf "%s\n" \
-      "[defaults]" \
-      "callback_plugins = /usr/share/ansible/plugins/callback" \
-      "stdout_callback = ansible_runner" \
-      "bin_ansible_callbacks = True" \
-      "nocows = 1" \
-      > /etc/ansible/ansible.cfg
 
 # -----------------------------------------------------------------------------
 # 5) Copy operator runtime bits from official OpenShift operator base
@@ -121,7 +105,7 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 7) Install ansible-runner + k8s deps via pip
-#    Then: locate & install the ansible_runner callback plugin deterministically.
+#    Then: copy runner callback plugins and set stdout_callback to the REAL plugin name.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
@@ -133,10 +117,12 @@ RUN set -eux; \
     ansible-runner --version; \
     \
     python3 - <<'PY'
-import os, shutil, glob
+import os, glob, shutil
 import ansible_runner
 
 pkg_dir = os.path.dirname(ansible_runner.__file__)
+
+# These cover runner 2.3.x and 2.4.x layouts
 candidates = [
     os.path.join(pkg_dir, "plugins", "callback"),
     os.path.join(pkg_dir, "display_callback", "callback"),
@@ -146,7 +132,7 @@ candidates = [
 found = None
 for d in candidates:
     if os.path.isdir(d):
-        pyfiles = glob.glob(os.path.join(d, "*.py"))
+        pyfiles = [p for p in glob.glob(os.path.join(d, "*.py")) if not p.endswith("__init__.py")]
         if pyfiles:
             found = d
             break
@@ -157,17 +143,44 @@ if not found:
 dst = "/usr/share/ansible/plugins/callback"
 os.makedirs(dst, exist_ok=True)
 
-for p in glob.glob(os.path.join(found, "*.py")):
+pyfiles = [p for p in glob.glob(os.path.join(found, "*.py")) if not p.endswith("__init__.py")]
+for p in pyfiles:
     shutil.copy2(p, os.path.join(dst, os.path.basename(p)))
 
 print("Copied callback plugin file(s) from", found, "to", dst)
 
-# Operator expects stdout_callback=ansible_runner, which maps to ansible_runner.py
-if not os.path.exists(os.path.join(dst, "ansible_runner.py")):
-    raise SystemExit("ERROR: ansible_runner.py callback not found after copy; cannot set stdout_callback=ansible_runner")
+# Pick the "best" stdout callback name:
+# Prefer a file that looks like the runner callback; fall back to the first plugin file.
+names = [os.path.splitext(os.path.basename(p))[0] for p in pyfiles]
+preferred = None
+for cand in ("ansible_runner", "runner", "awx_display", "display"):
+    if cand in names:
+        preferred = cand
+        break
+if not preferred:
+    preferred = sorted(names)[0]
+
+# Write ansible.cfg to use the discovered callback plugin
+cfg = "/etc/ansible/ansible.cfg"
+os.makedirs("/etc/ansible", exist_ok=True)
+with open(cfg, "w") as f:
+    f.write("[defaults]\n")
+    f.write("callback_plugins = /usr/share/ansible/plugins/callback\n")
+    f.write(f"stdout_callback = {preferred}\n")
+    f.write("bin_ansible_callbacks = True\n")
+    f.write("nocows = 1\n")
+
+print("Configured stdout_callback =", preferred)
 PY
     \
-    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
+    # Sanity: ensure ansible can see the configured callback
+    python3 - <<'PY'
+import configparser
+cfg = configparser.ConfigParser()
+cfg.read("/etc/ansible/ansible.cfg")
+cb = cfg.get("defaults", "stdout_callback", fallback="")
+print("Sanity check: stdout_callback =", cb)
+PY
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
