@@ -116,7 +116,6 @@ RUN set -eux; \
       "openshift>=0.13.2"; \
     python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
     ansible-runner --version; \
-    \
     cat > /tmp/install_runner_callback.py <<'PY'
 import os, glob, shutil, configparser
 import ansible_runner
@@ -169,15 +168,16 @@ with open(cfg_path, "w") as f:
 
 print("Configured stdout_callback =", preferred)
 
-# Sanity check read-back
 cfg = configparser.ConfigParser()
 cfg.read(cfg_path)
 print("Sanity check: stdout_callback =", cfg.get("defaults", "stdout_callback", fallback=""))
 PY
+    ; \
     python3 /tmp/install_runner_callback.py; \
     rm -f /tmp/install_runner_callback.py; \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
+
 
 # -----------------------------------------------------------------------------
 # 8) Required certification labels + NOTICE
