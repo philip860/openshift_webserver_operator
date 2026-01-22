@@ -54,7 +54,6 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 4) OpenShift-friendly dirs + IMPORTANT runner/callback settings
-#    We explicitly wire the ansible_runner callback so playbook_on_stats is emitted.
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -81,7 +80,6 @@ RUN set -eux; \
     chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible; \
     chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /usr/share/ansible/plugins /etc/ansible
 
-# Provide a deterministic Ansible config that matches our env vars
 RUN set -eux; \
     printf "%s\n" \
       "[defaults]" \
@@ -131,11 +129,9 @@ RUN set -eux; \
       "ansible-runner>=2.3.6" \
       "kubernetes>=24.2.0" \
       "openshift>=0.13.2"; \
-    python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK:', ansible_runner.__version__)"; \
+    python3 -c "import kubernetes, openshift, ansible_runner; print('python deps OK')"; \
     ansible-runner --version; \
     \
-    # Find callback plugin directory inside ansible_runner (varies by version),
-    # then copy callback .py files into /usr/share/ansible/plugins/callback
     python3 - <<'PY'
 import os, shutil, glob
 import ansible_runner
@@ -150,7 +146,7 @@ candidates = [
 found = None
 for d in candidates:
     if os.path.isdir(d):
-        pyfiles = [p for p in glob.glob(os.path.join(d, "*.py"))]
+        pyfiles = glob.glob(os.path.join(d, "*.py"))
         if pyfiles:
             found = d
             break
@@ -161,21 +157,16 @@ if not found:
 dst = "/usr/share/ansible/plugins/callback"
 os.makedirs(dst, exist_ok=True)
 
-copied = 0
 for p in glob.glob(os.path.join(found, "*.py")):
     shutil.copy2(p, os.path.join(dst, os.path.basename(p)))
-    copied += 1
 
-print(f"Copied {copied} callback plugin file(s) from {found} to {dst}")
+print("Copied callback plugin file(s) from", found, "to", dst)
 
-# Ensure the ansible_runner callback exists after copy (name must match stdout_callback)
+# Operator expects stdout_callback=ansible_runner, which maps to ansible_runner.py
 if not os.path.exists(os.path.join(dst, "ansible_runner.py")):
-    # Some releases name it differently; fail hard because operator expects playbook_on_stats.
-    # If this triggers, we can adapt to the present filename(s) in your build output.
-    raise SystemExit("ERROR: ansible_runner.py callback not found in copied plugins; cannot set stdout_callback=ansible_runner")
+    raise SystemExit("ERROR: ansible_runner.py callback not found after copy; cannot set stdout_callback=ansible_runner")
 PY
     \
-    # Sanity: confirm Ansible can load the callback plugin we just installed
     ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
