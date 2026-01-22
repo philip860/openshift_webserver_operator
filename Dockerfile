@@ -122,11 +122,19 @@ RUN set -eux; \
     echo "DEST_SITEPKG=${DEST_SITEPKG}"; \
     mkdir -p "${DEST_SITEPKG}"; \
     \
-    # Locate operator-src site-packages (python version may vary in the source image)
-    SRC_SITEPKG="$(find /tmp/operator-src -type d -path '*/site-packages' | head -n 1 || true)"; \
+    # Find the operator-src site-packages that *actually contains* ansible and runner
+    SRC_SITEPKG="$( \
+      find /tmp/operator-src -type d -name site-packages -print 2>/dev/null \
+      | while read -r d; do \
+          if [ -d "$d/ansible" ] && [ -d "$d/ansible_runner" ]; then echo "$d"; break; fi; \
+        done \
+    )"; \
     if [ -z "$SRC_SITEPKG" ]; then \
-      echo "ERROR: could not find operator-src site-packages under /tmp/operator-src"; \
-      find /tmp/operator-src -maxdepth 10 -type d -name site-packages | head -n 200 || true; \
+      echo "ERROR: could not find site-packages containing ansible + ansible_runner in operator-src"; \
+      echo "DEBUG: candidate site-packages dirs:"; \
+      find /tmp/operator-src -type d -name site-packages -print | head -n 200 || true; \
+      echo "DEBUG: searching for ansible modules:"; \
+      find /tmp/operator-src -maxdepth 12 -type d -name ansible -o -name ansible_runner | head -n 200 || true; \
       exit 1; \
     fi; \
     echo "Using SRC_SITEPKG=${SRC_SITEPKG}"; \
@@ -134,11 +142,9 @@ RUN set -eux; \
     cp -a "${SRC_SITEPKG}/ansible" "${DEST_SITEPKG}/"; \
     cp -a "${SRC_SITEPKG}/ansible_runner" "${DEST_SITEPKG}/"; \
     \
-    # copy related dist-info if present (helps packaging metadata)
     cp -a "${SRC_SITEPKG}"/ansible-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     cp -a "${SRC_SITEPKG}"/ansible_runner-*.dist-info "${DEST_SITEPKG}/" 2>/dev/null || true; \
     \
-    # extra deps: keep builds from failing with ModuleNotFoundError (yaml/pexpect/daemon/etc.)
     /usr/local/bin/python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
     /usr/local/bin/python3 -m pip install --no-cache-dir \
       "pexpect>=4.8.0" \
@@ -153,6 +159,7 @@ RUN set -eux; \
     \
     /usr/local/bin/python3 -c "import pexpect, ptyprocess, yaml, daemon, lockfile, jinja2, packaging, resolvelib, cryptography; print('OK deps')"; \
     /usr/local/bin/python3 -c "import ansible, ansible_runner; print('OK:', ansible.__file__, ansible_runner.__file__)"
+
 
 # -----------------------------------------------------------------------------
 # 9) Clean temp copies
