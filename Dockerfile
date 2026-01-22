@@ -1,12 +1,10 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator (Ansible Operator) - UBI rebase WITHOUT breaking runner events
 #
-# Key idea:
-# - Keep ansible/ansible-runner Python bits from the official OCP operator base
-# - Rebase onto UBI9 for CVE/scan posture
-# - Transplant required python modules from operator-src:
-#     ansible, ansible_runner, importlib_metadata, zipp
-# - Do NOT pip install ansible-runner; do NOT force stdout_callback
+# Fixes in this version:
+# - DO NOT copy python3.12 site-packages into python3.9
+# - Prefer operator-src python3.9 site-packages first
+# - If importlib_metadata/zipp not present in operator-src, pip install ONLY those
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -20,7 +18,7 @@ USER 0
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# Collections are installed in the official image to avoid needing ansible-core in UBI.
+# Install collections in the official image (avoid needing ansible-core in UBI)
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
     if [ -s /tmp/requirements.yml ]; then \
@@ -29,7 +27,6 @@ RUN set -eux; \
     fi; \
     rm -f /tmp/requirements.yml
 
-# Package operator content into /opt tree
 COPY watches.yaml ${ANSIBLE_OPERATOR_DIR}/watches.yaml
 COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
 COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
@@ -48,31 +45,31 @@ RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# Enable UBI repos first, then install minimal runtime deps.
-# NOTE: We DO NOT install python importlib_metadata/zipp via RPMs because they are not present
-#       in your enabled repos. We will transplant them from operator-src instead.
+# Enable UBI repos + install minimal runtime deps
+# NOTE: Do NOT try to dnf install importlib-metadata/zipp (not in your repos)
 RUN set -eux; \
     dnf -y install dnf-plugins-core; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
     dnf config-manager --set-enabled ubi-9-appstream-rpms || true; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y makecache --refresh; \
-    dnf -y install ca-certificates \
-      python3 \
+    dnf -y install \
+      ca-certificates \
+      python3 python3-pip \
       python3-pyyaml python3-jinja2 python3-cryptography python3-requests python3-six \
       python3-pexpect \
       tar gzip findutils which shadow-utils; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# Patch UBI (scan/CVE reduction lever)
+# Patch UBI (CVE reduction)
 RUN set -eux; \
     dnf -y makecache --refresh; \
     dnf -y update --security --refresh || dnf -y update --refresh; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# OpenShift-friendly env (DO NOT set ANSIBLE_STDOUT_CALLBACK)
+# OpenShift-friendly env (IMPORTANT: do NOT force stdout_callback here)
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
     ANSIBLE_REMOTE_TEMP=/opt/ansible/.ansible/tmp \
@@ -81,7 +78,8 @@ ENV HOME=/opt/ansible \
     ANSIBLE_NOCOLOR=1 \
     ANSIBLE_FORCE_COLOR=0 \
     TERM=dumb \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_ROOT_USER_ACTION=ignore
 
 RUN set -eux; \
     mkdir -p \
@@ -92,30 +90,42 @@ RUN set -eux; \
       /licenses \
       ${ANSIBLE_OPERATOR_DIR} \
       /usr/local/bin \
-      /usr/lib/python3.9/site-packages
+      /usr/share/ansible/plugins/callback
 
-# Copy /opt runtime bits (including your operator content + collections installed in operator-src)
+# Copy /opt runtime bits (your operator content + collections installed in operator-src)
 COPY --from=operator-src /opt/ /opt/
 
 # Copy operator-src /usr to temp so we can locate python modules regardless of layout
 COPY --from=operator-src /usr/ /tmp/operator-src/usr/
 
 # Transplant python modules needed by operator execution:
-#  - ansible
-#  - ansible_runner
-#  - importlib_metadata (backport)
-#  - zipp (dependency of importlib_metadata backport)
+# - ansible
+# - ansible_runner
+# Prefer the SAME python minor version as the UBI image (python3.9 on UBI9).
+# If importlib_metadata/zipp are not present in operator-src python3.9 site-packages,
+# install only those two via pip.
 RUN set -eux; \
+    PYVER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"; \
+    echo "Final image python version: ${PYVER}"; \
+    \
     PYROOT=/tmp/operator-src/usr; \
-    find "$PYROOT" -maxdepth 7 -type d -name site-packages > /tmp/sitepkgs.txt || true; \
+    find "$PYROOT" -maxdepth 8 -type d -name site-packages > /tmp/sitepkgs.txt || true; \
     echo "Candidate site-packages:"; cat /tmp/sitepkgs.txt || true; \
+    \
+    # Prefer matching python version paths first
+    grep -E "/python${PYVER}/" /tmp/sitepkgs.txt > /tmp/sitepkgs.preferred.txt || true; \
+    if [ -s /tmp/sitepkgs.preferred.txt ]; then \
+      mv /tmp/sitepkgs.preferred.txt /tmp/sitepkgs.ordered.txt; \
+      grep -v -E "/python${PYVER}/" /tmp/sitepkgs.txt >> /tmp/sitepkgs.ordered.txt || true; \
+    else \
+      cp /tmp/sitepkgs.txt /tmp/sitepkgs.ordered.txt; \
+    fi; \
     \
     pick_dir() { \
       want="$1"; \
-      found=""; \
       while read -r d; do \
-        if [ -d "$d/$want" ]; then found="$d/$want"; echo "$found"; return 0; fi; \
-      done < /tmp/sitepkgs.txt; \
+        if [ -d "$d/$want" ]; then echo "$d/$want"; return 0; fi; \
+      done < /tmp/sitepkgs.ordered.txt; \
       return 1; \
     }; \
     \
@@ -126,34 +136,38 @@ RUN set -eux; \
     \
     if [ -z "$ANSIBLE_DIR" ]; then \
       echo "ERROR: could not find ansible/ in operator-src under /usr"; \
-      find "$PYROOT" -maxdepth 9 -type d -name ansible | head -n 50 || true; \
+      find "$PYROOT" -maxdepth 10 -type d -name ansible | head -n 50 || true; \
       exit 1; \
     fi; \
     if [ -z "$RUNNER_DIR" ]; then \
       echo "ERROR: could not find ansible_runner/ in operator-src under /usr"; \
-      find "$PYROOT" -maxdepth 9 -type d -name ansible_runner | head -n 50 || true; \
+      find "$PYROOT" -maxdepth 10 -type d -name ansible_runner | head -n 50 || true; \
       exit 1; \
     fi; \
     \
-    cp -a "$ANSIBLE_DIR" /usr/lib/python3.9/site-packages/; \
-    cp -a "$RUNNER_DIR" /usr/lib/python3.9/site-packages/; \
+    echo "Using ANSIBLE_DIR=$ANSIBLE_DIR"; \
+    echo "Using RUNNER_DIR=$RUNNER_DIR"; \
     \
-    # Copy importlib_metadata + zipp if present in operator-src (preferred)
-    if [ -n "$IMD_DIR" ]; then cp -a "$IMD_DIR" /usr/lib/python3.9/site-packages/; else echo "WARN: importlib_metadata/ not found in operator-src site-packages"; fi; \
-    if [ -n "$ZIPP_DIR" ]; then cp -a "$ZIPP_DIR" /usr/lib/python3.9/site-packages/; else echo "WARN: zipp/ not found in operator-src site-packages"; fi; \
+    # Copy into the *actual* python3 site-packages in this UBI image
+    DEST_SITEPKG="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+    echo "DEST_SITEPKG=$DEST_SITEPKG"; \
     \
-    # Copy dist-info metadata for these packages if present (helps tooling)
-    # We grab them from the same site-packages folder that contained ansible/.
-    SITEPKG_BASE="$(dirname "$ANSIBLE_DIR")"; \
-    cp -a "$SITEPKG_BASE"/ansible-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
-    cp -a "$SITEPKG_BASE"/ansible_runner-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
-    cp -a "$SITEPKG_BASE"/importlib_metadata-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
-    cp -a "$SITEPKG_BASE"/zipp-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
+    cp -a "$ANSIBLE_DIR" "$DEST_SITEPKG/"; \
+    cp -a "$RUNNER_DIR" "$DEST_SITEPKG/"; \
     \
-    rm -rf /tmp/operator-src/usr /tmp/sitepkgs.txt; \
+    # Copy importlib_metadata + zipp if present; else install via pip (tiny + reliable)
+    if [ -n "$IMD_DIR" ] && [ -n "$ZIPP_DIR" ]; then \
+      cp -a "$IMD_DIR" "$DEST_SITEPKG/"; \
+      cp -a "$ZIPP_DIR" "$DEST_SITEPKG/"; \
+      echo "Copied importlib_metadata + zipp from operator-src"; \
+    else \
+      echo "operator-src missing importlib_metadata/zipp for python${PYVER}; installing via pip"; \
+      python3 -m pip install --no-cache-dir "importlib-metadata<6.3" "zipp>=0.5"; \
+    fi; \
     \
-    # Sanity check: ansible_runner should import now (it needs importlib_metadata backport)
-    python3 -c "import ansible; import ansible_runner; import importlib_metadata; import zipp; print('OK imports:', ansible.__file__, ansible_runner.__file__)"
+    rm -rf /tmp/operator-src/usr /tmp/sitepkgs.txt /tmp/sitepkgs.ordered.txt; \
+    \
+    python3 -c "import ansible, ansible_runner; import importlib_metadata, zipp; print('OK imports:', ansible.__file__, ansible_runner.__file__)"
 
 # Bring over candidate bin dirs from operator-src (paths vary by image build)
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
