@@ -53,9 +53,7 @@ RUN set -eux; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
 # -----------------------------------------------------------------------------
-# 4) OpenShift-friendly dirs + IMPORTANT runner callback settings
-#    NOTE: We must NOT force stdout to "default" here; ansible-runner needs
-#          the ansible_runner callback to emit events (including playbook_on_stats).
+# 4) OpenShift-friendly dirs + runner callback settings
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -108,8 +106,8 @@ RUN set -eux; \
     /usr/local/bin/ansible-operator version
 
 # -----------------------------------------------------------------------------
-# 7) Install ansible-runner + k8s deps via pip, then ensure callback plugin is discoverable
-#    This is the key fix for "did not receive playbook_on_stats event".
+# 7) Install ansible-runner + k8s deps via pip, then make callback discoverable
+#    (NO heredocs; use python -c to avoid Dockerfile heredoc parser issues)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
@@ -117,24 +115,10 @@ RUN set -eux; \
       "ansible-runner>=2.3.6" \
       "kubernetes>=24.2.0" \
       "openshift>=0.13.2"; \
-    python3 -c "import kubernetes, openshift; print('python deps OK')"; \
+    python3 -c "import kubernetes, openshift; print(\"python deps OK\")"; \
     ansible-runner --version; \
-    # Copy ansible-runner callback plugin(s) into a standard Ansible callback path
-    python3 - <<'PY'\n\
-import os, shutil\n\
-import ansible_runner\n\
-cb_src = os.path.join(os.path.dirname(ansible_runner.__file__), "plugins", "callback")\n\
-cb_dst = "/usr/share/ansible/plugins/callback"\n\
-os.makedirs(cb_dst, exist_ok=True)\n\
-for fn in os.listdir(cb_src):\n\
-    if fn.endswith(".py"):\n\
-        shutil.copy2(os.path.join(cb_src, fn), os.path.join(cb_dst, fn))\n\
-print("Copied callbacks from", cb_src, "to", cb_dst)\n\
-PY\n\
-    ; \
-    # Make sure Ansible sees this directory
+    python3 -c 'import os, shutil, ansible_runner; src=os.path.join(os.path.dirname(ansible_runner.__file__), "plugins", "callback"); dst="/usr/share/ansible/plugins/callback"; os.makedirs(dst, exist_ok=True); [shutil.copy2(os.path.join(src,f), os.path.join(dst,f)) for f in os.listdir(src) if f.endswith(".py")]; print("Copied callbacks to", dst)'; \
     printf "[defaults]\ncallback_plugins = /usr/share/ansible/plugins/callback\nstdout_callback = ansible_runner\n" > /etc/ansible/ansible.cfg; \
-    # Sanity: confirm Ansible can load the callback
     ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
     dnf -y clean all || true; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
@@ -176,16 +160,15 @@ RUN set -eux; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /usr/share/ansible/plugins
 
 # -----------------------------------------------------------------------------
-# 10) Entrypoint shim
+# 10) Entrypoint shim (keep heredoc simple + correct)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    cat > /usr/local/bin/entrypoint <<'EOF'\n\
-#!/bin/sh\n\
-set -eu\n\
-exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml\n\
-EOF\n\
-    ; \
-    chmod +x /usr/local/bin/entrypoint
+    cat > /usr/local/bin/entrypoint <<'EOF'
+#!/bin/sh
+set -eu
+exec /usr/local/bin/ansible-operator run --watches-file=/opt/ansible-operator/watches.yaml
+EOF
+RUN chmod +x /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
 # 11) Drop to non-root for OpenShift
