@@ -119,21 +119,29 @@ RUN set -eux; \
       "openshift>=0.13.2"; \
     python3 -c "import kubernetes, openshift; print('python deps OK')"; \
     ansible-runner --version; \
-    # Copy ansible-runner callback plugin(s) into a standard Ansible callback path
-    python3 - <<'PY'\n\
-import os, shutil\n\
-import ansible_runner\n\
-cb_src = os.path.join(os.path.dirname(ansible_runner.__file__), "plugins", "callback")\n\
-cb_dst = "/usr/share/ansible/plugins/callback"\n\
-os.makedirs(cb_dst, exist_ok=True)\n\
-for fn in os.listdir(cb_src):\n\
-    if fn.endswith(".py"):\n\
-        shutil.copy2(os.path.join(cb_src, fn), os.path.join(cb_dst, fn))\n\
-print("Copied callbacks from", cb_src, "to", cb_dst)\n\
-PY\n\
-    ; \
+    \
+    # Write a temp Python script (avoids Docker heredoc parsing edge-cases)
+    cat > /tmp/copy_callbacks.py <<'PY'; \
+import os, shutil
+import ansible_runner
+
+cb_src = os.path.join(os.path.dirname(ansible_runner.__file__), "plugins", "callback")
+cb_dst = "/usr/share/ansible/plugins/callback"
+os.makedirs(cb_dst, exist_ok=True)
+
+for fn in os.listdir(cb_src):
+    if fn.endswith(".py"):
+        shutil.copy2(os.path.join(cb_src, fn), os.path.join(cb_dst, fn))
+
+print("Copied callbacks from", cb_src, "to", cb_dst)
+PY
+    python3 /tmp/copy_callbacks.py; \
+    rm -f /tmp/copy_callbacks.py; \
+    \
     # Make sure Ansible sees this directory
+    mkdir -p /etc/ansible; \
     printf "[defaults]\ncallback_plugins = /usr/share/ansible/plugins/callback\nstdout_callback = ansible_runner\n" > /etc/ansible/ansible.cfg; \
+    \
     # Sanity: confirm Ansible can load the callback
     ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1); \
     dnf -y clean all || true; \
@@ -178,7 +186,6 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 10) Entrypoint shim
 # -----------------------------------------------------------------------------
-# ---- Create entrypoint (NO heredoc tricks, strict and portable) ----
 RUN set -eux; \
   printf '%s\n' \
     '#!/bin/sh' \
