@@ -1,6 +1,9 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator (Ansible Operator) - Path B (Publish REBASED UBI image)
-# Fixes curl-minimal vs curl conflict + prevents RHEL subscription repos mixing
+# Fixes:
+# - curl-minimal vs curl conflict
+# - prevents RHEL subscription repos mixing
+# - fixes ansible-galaxy "bad interpreter" by copying /usr/local (python runtime)
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -19,20 +22,13 @@ USER 0
 ENV ANSIBLE_OPERATOR_DIR=/opt/ansible-operator
 WORKDIR ${ANSIBLE_OPERATOR_DIR}
 
-# -----------------------------------------------------------------------------
-# IMPORTANT REPO HYGIENE
-# - UBI images can have /etc/yum.repos.d/redhat.repo (subscription-manager in container mode)
-# - That repo can pull rhel-9-for-* repos and cause mixing/conflicts with UBI repos
-# - For Path B, we want UBI repos only, so remove redhat.repo up-front.
-# -----------------------------------------------------------------------------
+# Repo hygiene: keep UBI repos only
 RUN set -eux; \
     rm -f /etc/yum.repos.d/redhat.repo || true; \
     rm -f /etc/yum.repos.d/redhat.repo.rpmsave /etc/yum.repos.d/redhat.repo.rpmnew || true
 
-# -----------------------------------------------------------------------------
 # Enable UBI repos deterministically and install only what we need.
-# NOTE: DO NOT install `curl` (UBI ships curl-minimal; installing curl conflicts).
-# -----------------------------------------------------------------------------
+# NOTE: Don't install curl (curl-minimal already exists and conflicts with curl).
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum; \
     dnf config-manager --set-enabled ubi-9-baseos-rpms || true; \
@@ -42,7 +38,7 @@ RUN set -eux; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# Patch UBI FIRST
+# Patch UBI first
 RUN set -eux; \
     dnf -y makecache --refresh; \
     dnf -y update --security --refresh; \
@@ -53,41 +49,30 @@ RUN set -eux; \
 RUN set -eux; \
     mkdir -p /opt/ansible /opt/ansible/.ansible /licenses /opt/ansible-operator /tmp/patching
 
-# Copy ONLY operator runtime bits from the official operator base
-COPY --from=operator-src /usr/local/bin/ /usr/local/bin/
+# Copy operator runtime bits from official base
 COPY --from=operator-src /opt/ /opt/
+COPY --from=operator-src /usr/local/bin/ /usr/local/bin/
 
-# Patch AGAIN after copying /opt (to update any newly introduced RPM content)
+# *** CRITICAL FIX ***
+# ansible-galaxy in /usr/local/bin uses shebang /usr/local/bin/python3.
+# Copy the python runtime + related /usr/local content from the operator base.
+COPY --from=operator-src /usr/local/ /usr/local/
+
+# Patch again after copying runtime bits
 RUN set -eux; \
     dnf -y makecache --refresh; \
     dnf -y update --security --refresh; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# (Optional) Offline/local RPM patching (./patching/*.rpm)
-# COPY patching/ /tmp/patching/
-# RUN set -eux; \
-#     echo "=== Offline/local patching (if RPMs present) ==="; \
-#     ls -lah /tmp/patching || true; \
-#     rpms="$(ls -1 /tmp/patching/*.rpm 2>/dev/null || true)"; \
-#     if [ -n "${rpms}" ]; then \
-#       echo "Installing local RPMs:"; \
-#       echo "${rpms}" | sed 's/^/  - /'; \
-#       yum -y localinstall /tmp/patching/*.rpm; \
-#     else \
-#       echo "No RPMs found in /tmp/patching (skipping yum localinstall)."; \
-#     fi; \
-#     yum -y clean all; \
-#     rm -rf /var/cache/dnf /var/cache/yum /tmp/patching /var/tmp/* /tmp/*
-
-# Verification (debug; can remove later)
+# Verification (debug; remove later)
 RUN set -eux; \
-    echo "=== Enabled repos (final) ==="; \
-    dnf -y repolist || true; \
-    echo "=== RPM versions (rebased final) ==="; \
-    rpm -q curl-minimal curl pam libxml2 libarchive expat sqlite-libs krb5-libs 2>/dev/null || true
+    echo "=== python + ansible-galaxy sanity ==="; \
+    ls -l /usr/local/bin/python3 || true; \
+    /usr/local/bin/python3 --version || true; \
+    /usr/local/bin/ansible-galaxy --version || true
 
-# Required certification labels (edit as needed)
+# Required certification labels
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
       maintainer="Phil Duncan <philipduncan860@gmail.com>" \
@@ -96,7 +81,7 @@ LABEL name="webserver-operator" \
       summary="Kubernetes operator to deploy and manage web workloads" \
       description="An Ansible-based operator that manages web workload deployments on OpenShift/Kubernetes."
 
-# Licensing for HasLicense check
+# Licensing
 RUN mkdir -p /licenses \
  && printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
