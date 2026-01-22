@@ -5,14 +5,13 @@
 # - ansible-playbook exists (dnf install ansible-core)
 # - kubernetes/openshift python libs installed for the SAME interpreter ansible uses (/usr/bin/python3)
 # - ansible-runner executable exists in PATH AND its python module is installed for /usr/bin/python3
-# - runner callback plugin copied into a standard callback_plugins path
 # - pin resolvelib to satisfy ansible-core 2.14.x requirements (resolvelib<0.9.0)
-# - do NOT use ansible_runner.__version__ (not always present); validate via CLI instead
+# - do NOT try to copy ansible_runner callback plugin (path no longer exists in ansible-runner 2.4.x)
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
-# Stage 0: official operator image (known-good operator runtime bits under /opt, config under /etc/ansible)
+# Stage 0: official operator image (for ansible-operator binary and base config)
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
 # Stage 1: rebased UBI image we publish
@@ -52,7 +51,6 @@ RUN set -eux; \
     dnf -y clean all; \
     rm -rf /var/cache/dnf /var/tmp/* /tmp/*
 
-# Silence pip warnings in container builds
 ENV PIP_ROOT_USER_ACTION=ignore
 ENV PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
@@ -76,16 +74,15 @@ RUN set -eux; \
       /etc/ansible \
       /licenses \
       ${ANSIBLE_OPERATOR_DIR} \
-      /usr/local/bin \
-      /usr/share/ansible/plugins/callback
+      /usr/local/bin
 
 # -----------------------------------------------------------------------------
-# 5) Copy operator runtime bits (under /opt) and ansible config from official base
+# 5) Copy operator runtime bits and ansible config from official base
 # -----------------------------------------------------------------------------
 COPY --from=operator-src /opt/ /opt/
 COPY --from=operator-src /etc/ansible/ /etc/ansible/
 
-# Stash operator-src bins under /tmp so we can extract the operator binaries
+# Stage0 bins into temp
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
 COPY --from=operator-src /usr/bin/ /tmp/operator-src/usr-bin/
 
@@ -132,9 +129,6 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 9) Install python deps for *system python* (/usr/bin/python3)
-#    - Fixes: missing kubernetes/openshift libs for localhost modules
-#    - Fixes: runner deps pexpect/pyyaml/python-daemon/etc
-#    - IMPORTANT: do NOT reference ansible_runner.__version__ (not always present)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     /usr/bin/python3 -m pip install --no-cache-dir --upgrade -c /etc/pip-constraints.txt \
@@ -158,19 +152,7 @@ RUN set -eux; \
     /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
-# 10) Make ansible-runner callback plugin discoverable (standard path)
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    /usr/bin/python3 -c 'import os, shutil, ansible_runner; \
-      src=os.path.join(os.path.dirname(ansible_runner.__file__), "plugins", "callback"); \
-      dst="/usr/share/ansible/plugins/callback"; \
-      os.makedirs(dst, exist_ok=True); \
-      [shutil.copy2(os.path.join(src,f), os.path.join(dst,f)) for f in os.listdir(src) if f.endswith(".py")]; \
-      print("Copied callbacks to", dst)'; \
-    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1)
-
-# -----------------------------------------------------------------------------
-# 11) Verify the exact runtime commands the operator needs
+# 10) Verify runtime commands exist (no callback-copy step)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     command -v ansible-playbook; \
@@ -179,13 +161,13 @@ RUN set -eux; \
     /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
-# 12) Clean temp copies
+# 11) Clean temp copies
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     rm -rf /tmp/operator-src
 
 # -----------------------------------------------------------------------------
-# 13) Environment
+# 12) Environment
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -196,7 +178,7 @@ ENV HOME=/opt/ansible \
     PYTHONUNBUFFERED=1
 
 # -----------------------------------------------------------------------------
-# 14) Required certification labels + NOTICE
+# 13) Required certification labels + NOTICE
 # -----------------------------------------------------------------------------
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
@@ -211,7 +193,7 @@ RUN set -eux; \
     printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
 # -----------------------------------------------------------------------------
-# 15) Collections + operator content
+# 14) Collections + operator content
 # -----------------------------------------------------------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
@@ -224,19 +206,19 @@ RUN set -eux; \
       fi; \
     fi; \
     rm -f /tmp/requirements.yml; \
-    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible /usr/share/ansible || true; \
-    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible /usr/share/ansible || true
+    chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible || true; \
+    chmod -R g+rwX /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible || true
 
 COPY watches.yaml ${ANSIBLE_OPERATOR_DIR}/watches.yaml
 COPY playbooks/ ${ANSIBLE_OPERATOR_DIR}/playbooks/
 COPY roles/ ${ANSIBLE_OPERATOR_DIR}/roles/
 
 RUN set -eux; \
-    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible /usr/share/ansible || true; \
-    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible /usr/share/ansible || true
+    chgrp -R 0 ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true; \
+    chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true
 
 # -----------------------------------------------------------------------------
-# 16) Entrypoint
+# 15) Entrypoint
 # -----------------------------------------------------------------------------
 RUN set -eux; \
   printf '%s\n' \
@@ -247,7 +229,7 @@ RUN set -eux; \
   chmod 0755 /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
-# 17) Run as OpenShift arbitrary UID (non-root)
+# 16) Run as OpenShift arbitrary UID (non-root)
 # -----------------------------------------------------------------------------
 USER 1001
 ENV ANSIBLE_USER_ID=1001
