@@ -1,23 +1,18 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator (Ansible Operator) - Path B (UBI rebase) WITHOUT breaking runner events
 #
-# Goals:
-# - Publish a UBI9-based image to pick up UBI errata/CVE fixes (scan-friendly)
-# - Preserve the "official" ansible-runner/ansible callback/event behavior needed by
-#   ansible-operator-plugins so playbook_on_stats is emitted/received
-#
-# Key rules:
-# - Do NOT pip install ansible-runner in the final image
-# - Do NOT force stdout_callback via ENV or /etc/ansible/ansible.cfg
-# - TRANSPLANT the python modules for ansible + ansible_runner from operator-src
-# - Copy /opt runtime from operator-src (includes operator runtime bits)
-# - Copy bin entrypoints from operator-src using robust path detection (usr/local/bin vs usr/bin)
+# Fixes included:
+# - Robustly locate python site-packages for ansible/ansible_runner in operator-src
+#   (paths vary: /usr/lib64, /usr/local, etc.) and transplant into final image.
+# - Robustly copy required binaries from operator-src (/usr/local/bin vs /usr/bin).
+# - Do NOT pip install ansible-runner; do NOT force stdout_callback.
+# - UBI9 base + dnf update --security for scan/CVE reduction.
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
 # -----------------------------------------------------------------------------
-# Stage 0: Official operator base as source-of-truth
+# Stage 0: Official operator base as source-of-truth (runner events OK here)
 # -----------------------------------------------------------------------------
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
@@ -91,17 +86,56 @@ RUN set -eux; \
       /opt/ansible/.ansible/roles \
       /etc/ansible \
       /licenses \
-      ${ANSIBLE_OPERATOR_DIR}
+      ${ANSIBLE_OPERATOR_DIR} \
+      /usr/local/bin \
+      /usr/lib/python3.9/site-packages
 
-# Copy operator runtime bits from official base
+# Copy operator runtime bits from official base (includes /opt, your content, collections, etc.)
 COPY --from=operator-src /opt/ /opt/
 
-# Copy python modules for ansible + ansible_runner from official base
-# (These are the pieces most likely to preserve correct event/callback behavior)
-COPY --from=operator-src /usr/lib/python3.9/site-packages/ansible/ /usr/lib/python3.9/site-packages/ansible/
-COPY --from=operator-src /usr/lib/python3.9/site-packages/ansible-*.dist-info/ /usr/lib/python3.9/site-packages/
-COPY --from=operator-src /usr/lib/python3.9/site-packages/ansible_runner/ /usr/lib/python3.9/site-packages/ansible_runner/
-COPY --from=operator-src /usr/lib/python3.9/site-packages/ansible_runner-*.dist-info/ /usr/lib/python3.9/site-packages/
+# Copy /usr from operator-src into temp so we can locate python modules regardless of layout
+# (operator-src may use /usr/lib64 or /usr/local, etc.)
+COPY --from=operator-src /usr/ /tmp/operator-src/usr/
+
+# Transplant ansible + ansible_runner python modules from operator-src into this image
+RUN set -eux; \
+    PYROOT=/tmp/operator-src/usr; \
+    find "$PYROOT" -maxdepth 7 -type d -name site-packages > /tmp/sitepkgs.txt || true; \
+    echo "Candidate site-packages:"; \
+    cat /tmp/sitepkgs.txt || true; \
+    \
+    ANSIBLE_DIR=""; RUNNER_DIR=""; SITEPKG_BASE=""; \
+    while read -r d; do \
+      if [ -z "$ANSIBLE_DIR" ] && [ -d "$d/ansible" ]; then ANSIBLE_DIR="$d/ansible"; SITEPKG_BASE="$d"; fi; \
+      if [ -z "$RUNNER_DIR" ] && [ -d "$d/ansible_runner" ]; then RUNNER_DIR="$d/ansible_runner"; fi; \
+    done < /tmp/sitepkgs.txt; \
+    \
+    if [ -z "$ANSIBLE_DIR" ]; then \
+      echo "ERROR: could not find ansible/ in operator-src under /usr"; \
+      find "$PYROOT" -maxdepth 9 -type d -name ansible | head -n 50 || true; \
+      exit 1; \
+    fi; \
+    if [ -z "$RUNNER_DIR" ]; then \
+      echo "ERROR: could not find ansible_runner/ in operator-src under /usr"; \
+      find "$PYROOT" -maxdepth 9 -type d -name ansible_runner | head -n 50 || true; \
+      exit 1; \
+    fi; \
+    \
+    # Copy modules
+    cp -a "$ANSIBLE_DIR" /usr/lib/python3.9/site-packages/; \
+    cp -a "$RUNNER_DIR" /usr/lib/python3.9/site-packages/; \
+    \
+    # Copy dist-info metadata if present (helps tooling)
+    if [ -n "$SITEPKG_BASE" ]; then \
+      cp -a "$SITEPKG_BASE"/ansible-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
+      cp -a "$SITEPKG_BASE"/ansible_runner-*.dist-info /usr/lib/python3.9/site-packages/ 2>/dev/null || true; \
+    fi; \
+    \
+    # Cleanup temp /usr copy
+    rm -rf /tmp/operator-src/usr /tmp/sitepkgs.txt; \
+    \
+    # Sanity check
+    python3 -c "import ansible, ansible_runner; print('ansible:', ansible.__file__); print('ansible_runner:', ansible_runner.__file__)"
 
 # Bring over candidate bin dirs from operator-src (paths vary by image build)
 COPY --from=operator-src /usr/local/bin/ /tmp/operator-src/usr-local-bin/
@@ -109,8 +143,6 @@ COPY --from=operator-src /usr/bin/       /tmp/operator-src/usr-bin/
 
 # Install required CLIs from whichever location exists
 RUN set -eux; \
-    mkdir -p /usr/local/bin; \
-    \
     # ansible-operator MUST exist
     if [ -x /tmp/operator-src/usr-local-bin/ansible-operator ]; then \
       install -m 0755 /tmp/operator-src/usr-local-bin/ansible-operator /usr/local/bin/ansible-operator; \
@@ -123,7 +155,7 @@ RUN set -eux; \
       exit 1; \
     fi; \
     \
-    # Optional CLIs (may not exist in operator-src; that's OK)
+    # Optional CLIs (may not exist; OK)
     for b in ansible-runner ansible-playbook ansible-galaxy ansible-doc ansible; do \
       if [ -x "/tmp/operator-src/usr-local-bin/$b" ]; then \
         install -m 0755 "/tmp/operator-src/usr-local-bin/$b" "/usr/local/bin/$b"; \
