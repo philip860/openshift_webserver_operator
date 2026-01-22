@@ -108,6 +108,24 @@ RUN set -eux; \
     fi; \
     /usr/local/bin/ansible-operator version
 
+
+# -----------------------------------------------------------------------------
+# 7b) Install ansible-runner CLI from operator-src so the operator can exec it
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    if [ -x /tmp/operator-src/usr-local-bin/ansible-runner ]; then \
+      install -m 0755 /tmp/operator-src/usr-local-bin/ansible-runner /usr/local/bin/ansible-runner; \
+    elif [ -x /tmp/operator-src/usr-bin/ansible-runner ]; then \
+      install -m 0755 /tmp/operator-src/usr-bin/ansible-runner /usr/local/bin/ansible-runner; \
+    else \
+      echo "ERROR: ansible-runner CLI not found in operator-src"; \
+      ls -la /tmp/operator-src/usr-local-bin || true; \
+      ls -la /tmp/operator-src/usr-bin || true; \
+      exit 1; \
+    fi; \
+    /usr/local/bin/ansible-runner --version
+
+
 # -----------------------------------------------------------------------------
 # 8) Copy the *exact* site-packages for ansible + ansible_runner from operator-src
 #    into this rebased image’s current python3 site-packages.
