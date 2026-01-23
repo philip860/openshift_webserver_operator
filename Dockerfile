@@ -177,37 +177,18 @@ RUN set -eux; \
 # 11) CRITICAL: ensure playbook_on_stats event is emitted
 #     Force stdout_callback=ansible_runner and ensure callback plugin is discoverable.
 # -----------------------------------------------------------------------------
+# Make sure callback destination exists
 RUN set -eux; \
-    mkdir -p /usr/share/ansible/plugins/callback; \
-    /usr/bin/python3 - <<'PY' \
-import os, shutil, ansible_runner \
-dst = "/usr/share/ansible/plugins/callback" \
-pkgdir = os.path.dirname(ansible_runner.__file__) \
-candidates = [ \
-  os.path.join(pkgdir, "display_callback"), \
-  os.path.join(pkgdir, "callbacks"), \
-  os.path.join(pkgdir, "plugins", "callback"), \
-] \
-src = next((c for c in candidates if os.path.isdir(c)), None) \
-if not src: \
-  raise SystemExit(f"ERROR: could not locate ansible-runner callbacks under {pkgdir}. Tried: {candidates}") \
-copied = 0 \
-for root, _, files in os.walk(src): \
-  for f in files: \
-    if f.endswith(".py"): \
-      shutil.copy2(os.path.join(root, f), os.path.join(dst, f)) \
-      copied += 1 \
-print(f"Copied {copied} .py callback files from {src} -> {dst}") \
-PY; \
-    # ensure ansible will pick them up + use ansible_runner stdout callback
-    printf '%s\n' \
-      '[defaults]' \
-      'callback_plugins = /usr/share/ansible/plugins/callback' \
-      'stdout_callback = ansible_runner' \
-      'bin_ansible_callbacks = True' \
-    > /etc/ansible/ansible.cfg; \
-    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1)
+    mkdir -p /usr/share/ansible/plugins/callback /etc/ansible
 
+# Copy the helper into the image and run it using the image python
+COPY build_helper/install_runner_callback.py /usr/local/bin/install_runner_callback.py
+
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/install_runner_callback.py; \
+    /usr/bin/python3 /usr/local/bin/install_runner_callback.py; \
+    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || \
+      (echo "ERROR: ansible_runner callback not discoverable" && exit 1)
 
 # -----------------------------------------------------------------------------
 # 12) Verify runtime commands exist

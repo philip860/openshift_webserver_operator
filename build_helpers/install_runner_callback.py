@@ -47,6 +47,7 @@ def main() -> None:
     os.makedirs("/etc/ansible", exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write("[defaults]\n")
+        f.write("collections_paths = /opt/ansible/.ansible/collections:/usr/share/ansible/collections\n")
         f.write("callback_plugins = /usr/share/ansible/plugins/callback\n")
         f.write(f"stdout_callback = {preferred}\n")
         f.write("bin_ansible_callbacks = True\n")
