@@ -163,9 +163,15 @@ RUN set -eux; \
 # 10) Install/refresh operator_sdk.util collection (requested)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
+    mkdir -p /opt/ansible/.ansible/collections; \
+    chgrp -R 0 /opt/ansible; \
+    chmod -R g+rwX /opt/ansible; \
     ansible-galaxy collection install operator_sdk.util \
       --collections-path /opt/ansible/.ansible/collections; \
-    ansible-galaxy collection list | grep -E '^operator_sdk\.util\b'
+    ansible-galaxy collection list \
+      --collections-path /opt/ansible/.ansible/collections \
+      | grep -E '^operator_sdk\.util\b'
+
 
 # -----------------------------------------------------------------------------
 # 11) CRITICAL: ensure playbook_on_stats event is emitted
