@@ -1,17 +1,17 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator - Rebased UBI9 + Preserve official runner/ansible behavior
 #
-# Fixes included:
-# - ansible-playbook exists (dnf install ansible-core)
-# - kubernetes/openshift python libs installed for the SAME interpreter ansible uses (/usr/bin/python3)
-# - ansible-runner executable exists in PATH AND its python module is installed for /usr/bin/python3
-# - pin resolvelib to satisfy ansible-core 2.14.x requirements (resolvelib<0.9.0)
-# - do NOT try to copy ansible_runner callback plugin (path no longer exists in ansible-runner 2.4.x)
+# Goals:
+# - Pass Red Hat scan (UBI base + errata)
+# - Provide ansible-operator + ansible-runner CLI + ansible-playbook
+# - Ensure runner events work (playbook_on_stats) by forcing stdout_callback=ansible_runner
+# - Ensure localhost k8s modules work (kubernetes/openshift installed for /usr/bin/python3)
+# - Avoid pip dependency conflicts (pin resolvelib for ansible-core 2.14.x)
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
 
-# Stage 0: official operator image (for ansible-operator binary and base config)
+# Stage 0: official operator image (source of ansible-operator binary + base runtime bits)
 FROM registry.redhat.io/openshift4/ose-ansible-rhel9-operator@${OSE_ANSIBLE_DIGEST} AS operator-src
 
 # Stage 1: rebased UBI image we publish
@@ -74,7 +74,8 @@ RUN set -eux; \
       /etc/ansible \
       /licenses \
       ${ANSIBLE_OPERATOR_DIR} \
-      /usr/local/bin
+      /usr/local/bin \
+      /usr/share/ansible/plugins/callback
 
 # -----------------------------------------------------------------------------
 # 5) Copy operator runtime bits and ansible config from official base
@@ -129,6 +130,8 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # 9) Install python deps for *system python* (/usr/bin/python3)
+#    - ansible-runner module (needed by /usr/local/bin/ansible-runner)
+#    - kubernetes/openshift (needed by kubernetes.core modules on localhost)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     /usr/bin/python3 -m pip install --no-cache-dir --upgrade -c /etc/pip-constraints.txt \
@@ -152,7 +155,47 @@ RUN set -eux; \
     /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
-# 10) Verify runtime commands exist (no callback-copy step)
+# 10) CRITICAL FIX: ensure playbook_on_stats event is emitted
+#     Force stdout_callback=ansible_runner and ensure callback plugin is discoverable.
+#
+#     Do NOT try to copy callback from the pip package (often not present there).
+#     Instead, copy known-good callback plugin(s) from the official image content
+#     that was copied under /opt (from operator-src).
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    mkdir -p /usr/share/ansible/plugins/callback; \
+    \
+    # Copy callback plugin(s) from known-good locations shipped in the official image
+    if [ -d /opt/ansible/plugins/callback ]; then \
+      cp -av /opt/ansible/plugins/callback/* /usr/share/ansible/plugins/callback/ || true; \
+    fi; \
+    if [ -d /opt/ansible-runner/plugins/callback ]; then \
+      cp -av /opt/ansible-runner/plugins/callback/* /usr/share/ansible/plugins/callback/ || true; \
+    fi; \
+    \
+    # Hard fail if we still don't have an ansible_runner callback file
+    if ! ls -1 /usr/share/ansible/plugins/callback/ansible_runner*.py >/dev/null 2>&1; then \
+      echo "ERROR: ansible_runner callback plugin not found in /usr/share/ansible/plugins/callback"; \
+      echo "DEBUG: callback-related dirs under /opt:"; \
+      find /opt -maxdepth 7 -type d -path '*callback*' -print | head -n 200 || true; \
+      echo "DEBUG: current callback dir:"; \
+      ls -la /usr/share/ansible/plugins/callback || true; \
+      exit 1; \
+    fi; \
+    \
+    # Force ansible to use ansible_runner callback as stdout callback
+    printf '%s\n' \
+      '[defaults]' \
+      'callback_plugins = /usr/share/ansible/plugins/callback' \
+      'stdout_callback = ansible_runner' \
+      'bin_ansible_callbacks = True' \
+      > /etc/ansible/ansible.cfg; \
+    \
+    # Validate discovery
+    ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1)
+
+# -----------------------------------------------------------------------------
+# 11) Verify runtime commands exist
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     command -v ansible-playbook; \
@@ -161,13 +204,13 @@ RUN set -eux; \
     /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
-# 11) Clean temp copies
+# 12) Clean temp copies
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     rm -rf /tmp/operator-src
 
 # -----------------------------------------------------------------------------
-# 12) Environment
+# 13) Environment
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -175,10 +218,11 @@ ENV HOME=/opt/ansible \
     ANSIBLE_COLLECTIONS_PATHS=/opt/ansible/.ansible/collections:/usr/share/ansible/collections \
     ANSIBLE_ROLES_PATH=/opt/ansible/.ansible/roles:/etc/ansible/roles:/usr/share/ansible/roles \
     ANSIBLE_LOAD_CALLBACK_PLUGINS=1 \
+    ANSIBLE_PYTHON_INTERPRETER=/usr/bin/python3 \
     PYTHONUNBUFFERED=1
 
 # -----------------------------------------------------------------------------
-# 13) Required certification labels + NOTICE
+# 14) Required certification labels + NOTICE
 # -----------------------------------------------------------------------------
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
@@ -193,7 +237,7 @@ RUN set -eux; \
     printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
 # -----------------------------------------------------------------------------
-# 14) Collections + operator content
+# 15) Collections + operator content
 # -----------------------------------------------------------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
@@ -218,7 +262,7 @@ RUN set -eux; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true
 
 # -----------------------------------------------------------------------------
-# 15) Entrypoint
+# 16) Entrypoint
 # -----------------------------------------------------------------------------
 RUN set -eux; \
   printf '%s\n' \
@@ -229,7 +273,7 @@ RUN set -eux; \
   chmod 0755 /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
-# 16) Run as OpenShift arbitrary UID (non-root)
+# 17) Run as OpenShift arbitrary UID (non-root)
 # -----------------------------------------------------------------------------
 USER 1001
 ENV ANSIBLE_USER_ID=1001
