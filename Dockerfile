@@ -7,6 +7,8 @@
 # - Ensure runner events work (playbook_on_stats) by forcing stdout_callback=ansible_runner
 # - Ensure localhost k8s modules work (kubernetes/openshift installed for /usr/bin/python3)
 # - Avoid pip dependency conflicts (pin resolvelib for ansible-core 2.14.x)
+# - Install ansible-runner-http
+# - Install/refresh operator_sdk.util collection
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -132,12 +134,14 @@ RUN set -eux; \
 # 9) Install python deps for *system python* (/usr/bin/python3)
 #    - ansible-runner module (needed by /usr/local/bin/ansible-runner)
 #    - kubernetes/openshift (needed by kubernetes.core modules on localhost)
+#    - ansible-runner-http
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     /usr/bin/python3 -m pip install --no-cache-dir --upgrade -c /etc/pip-constraints.txt \
       pip setuptools wheel; \
     /usr/bin/python3 -m pip install --no-cache-dir -c /etc/pip-constraints.txt \
       "ansible-runner==2.4.1" \
+      "ansible-runner-http" \
       "kubernetes>=24.2.0" \
       "openshift>=0.13.2" \
       "pexpect>=4.8.0" \
@@ -152,20 +156,25 @@ RUN set -eux; \
     /usr/bin/python3 -m pip check; \
     /usr/bin/python3 -c "import kubernetes, openshift; print('OK: k8s libs')"; \
     /usr/bin/python3 -c "import ansible_runner; print('OK: ansible_runner import:', ansible_runner.__file__)"; \
+    /usr/bin/python3 -c "import ansible_runner_http; print('OK: ansible_runner_http import:', ansible_runner_http.__file__)"; \
     /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
-# 10) CRITICAL FIX: ensure playbook_on_stats event is emitted
+# 10) Install/refresh operator_sdk.util collection (requested)
+# -----------------------------------------------------------------------------
+RUN set -eux; \
+    ansible-galaxy collection install operator_sdk.util \
+      --collections-path /opt/ansible/.ansible/collections; \
+    ansible-galaxy collection list | grep -E '^operator_sdk\.util\b'
+
+# -----------------------------------------------------------------------------
+# 11) CRITICAL: ensure playbook_on_stats event is emitted
 #     Force stdout_callback=ansible_runner and ensure callback plugin is discoverable.
-#
-#     Do NOT try to copy callback from the pip package (often not present there).
-#     Instead, copy known-good callback plugin(s) from the official image content
-#     that was copied under /opt (from operator-src).
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     mkdir -p /usr/share/ansible/plugins/callback; \
     \
-    # Copy callback plugin(s) from known-good locations shipped in the official image
+    # Copy callback plugin(s) from known-good locations shipped in the official image content under /opt
     if [ -d /opt/ansible/plugins/callback ]; then \
       cp -av /opt/ansible/plugins/callback/* /usr/share/ansible/plugins/callback/ || true; \
     fi; \
@@ -191,11 +200,10 @@ RUN set -eux; \
       'bin_ansible_callbacks = True' \
       > /etc/ansible/ansible.cfg; \
     \
-    # Validate discovery
     ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1)
 
 # -----------------------------------------------------------------------------
-# 11) Verify runtime commands exist
+# 12) Verify runtime commands exist
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     command -v ansible-playbook; \
@@ -204,13 +212,13 @@ RUN set -eux; \
     /usr/local/bin/ansible-runner --version
 
 # -----------------------------------------------------------------------------
-# 12) Clean temp copies
+# 13) Clean temp copies
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     rm -rf /tmp/operator-src
 
 # -----------------------------------------------------------------------------
-# 13) Environment
+# 14) Environment
 # -----------------------------------------------------------------------------
 ENV HOME=/opt/ansible \
     ANSIBLE_LOCAL_TEMP=/opt/ansible/.ansible/tmp \
@@ -222,7 +230,7 @@ ENV HOME=/opt/ansible \
     PYTHONUNBUFFERED=1
 
 # -----------------------------------------------------------------------------
-# 14) Required certification labels + NOTICE
+# 15) Required certification labels + NOTICE
 # -----------------------------------------------------------------------------
 LABEL name="webserver-operator" \
       vendor="Duncan Networks" \
@@ -237,17 +245,13 @@ RUN set -eux; \
     printf "See project repository for license and terms.\n" > /licenses/NOTICE
 
 # -----------------------------------------------------------------------------
-# 15) Collections + operator content
+# 16) Operator content + collections (your project content)
 # -----------------------------------------------------------------------------
 COPY requirements.yml /tmp/requirements.yml
 RUN set -eux; \
     if [ -s /tmp/requirements.yml ]; then \
-      if command -v ansible-galaxy >/dev/null 2>&1; then \
-        ansible-galaxy collection install -r /tmp/requirements.yml \
-          --collections-path /opt/ansible/.ansible/collections; \
-      else \
-        echo "WARN: ansible-galaxy not found; collections step skipped"; \
-      fi; \
+      ansible-galaxy collection install -r /tmp/requirements.yml \
+        --collections-path /opt/ansible/.ansible/collections; \
     fi; \
     rm -f /tmp/requirements.yml; \
     chgrp -R 0 /opt/ansible /licenses ${ANSIBLE_OPERATOR_DIR} /etc/ansible || true; \
@@ -262,7 +266,7 @@ RUN set -eux; \
     chmod -R g=u ${ANSIBLE_OPERATOR_DIR} /opt/ansible /licenses /etc/ansible || true
 
 # -----------------------------------------------------------------------------
-# 16) Entrypoint
+# 17) Entrypoint
 # -----------------------------------------------------------------------------
 RUN set -eux; \
   printf '%s\n' \
@@ -273,7 +277,7 @@ RUN set -eux; \
   chmod 0755 /usr/local/bin/entrypoint
 
 # -----------------------------------------------------------------------------
-# 17) Run as OpenShift arbitrary UID (non-root)
+# 18) Run as OpenShift arbitrary UID (non-root)
 # -----------------------------------------------------------------------------
 USER 1001
 ENV ANSIBLE_USER_ID=1001
