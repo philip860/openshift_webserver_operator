@@ -179,34 +179,35 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     mkdir -p /usr/share/ansible/plugins/callback; \
-    \
-    # Copy callback plugin(s) from known-good locations shipped in the official image content under /opt
-    if [ -d /opt/ansible/plugins/callback ]; then \
-      cp -av /opt/ansible/plugins/callback/* /usr/share/ansible/plugins/callback/ || true; \
-    fi; \
-    if [ -d /opt/ansible-runner/plugins/callback ]; then \
-      cp -av /opt/ansible-runner/plugins/callback/* /usr/share/ansible/plugins/callback/ || true; \
-    fi; \
-    \
-    # Hard fail if we still don't have an ansible_runner callback file
-    if ! ls -1 /usr/share/ansible/plugins/callback/ansible_runner*.py >/dev/null 2>&1; then \
-      echo "ERROR: ansible_runner callback plugin not found in /usr/share/ansible/plugins/callback"; \
-      echo "DEBUG: callback-related dirs under /opt:"; \
-      find /opt -maxdepth 7 -type d -path '*callback*' -print | head -n 200 || true; \
-      echo "DEBUG: current callback dir:"; \
-      ls -la /usr/share/ansible/plugins/callback || true; \
-      exit 1; \
-    fi; \
-    \
-    # Force ansible to use ansible_runner callback as stdout callback
+    /usr/bin/python3 - <<'PY' \
+import os, shutil, ansible_runner \
+dst = "/usr/share/ansible/plugins/callback" \
+pkgdir = os.path.dirname(ansible_runner.__file__) \
+candidates = [ \
+  os.path.join(pkgdir, "display_callback"), \
+  os.path.join(pkgdir, "callbacks"), \
+  os.path.join(pkgdir, "plugins", "callback"), \
+] \
+src = next((c for c in candidates if os.path.isdir(c)), None) \
+if not src: \
+  raise SystemExit(f"ERROR: could not locate ansible-runner callbacks under {pkgdir}. Tried: {candidates}") \
+copied = 0 \
+for root, _, files in os.walk(src): \
+  for f in files: \
+    if f.endswith(".py"): \
+      shutil.copy2(os.path.join(root, f), os.path.join(dst, f)) \
+      copied += 1 \
+print(f"Copied {copied} .py callback files from {src} -> {dst}") \
+PY; \
+    # ensure ansible will pick them up + use ansible_runner stdout callback
     printf '%s\n' \
       '[defaults]' \
       'callback_plugins = /usr/share/ansible/plugins/callback' \
       'stdout_callback = ansible_runner' \
       'bin_ansible_callbacks = True' \
-      > /etc/ansible/ansible.cfg; \
-    \
+    > /etc/ansible/ansible.cfg; \
     ansible-doc -t callback ansible_runner >/dev/null 2>&1 || (echo "ERROR: ansible_runner callback not discoverable" && exit 1)
+
 
 # -----------------------------------------------------------------------------
 # 12) Verify runtime commands exist
