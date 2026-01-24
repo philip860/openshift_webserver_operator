@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Duncan Networks | OpenShift Operators</title>
+  <meta name="description" content="Kubernetes-native automation delivered as Operators. OpenShift • Operators • GitOps" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <header class="site-header" id="top">
+    <div class="container header-inner">
+      <a class="brand" href="#top" aria-label="Duncan Networks Home">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span class="brand-text">Duncan Networks</span>
+      </a>
+
+      <nav class="nav">
+        <a href="#operators">Operators</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#principles">Principles</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">OpenShift • Operators • GitOps</p>
+          <h1>Kubernetes-native automation delivered as Operators.</h1>
+          <p class="lead">
+            We build OpenShift Operators that package day-2 operations into repeatable,
+            supportable APIs — backed by best practices for OLM, RBAC, and secure delivery.
+          </p>
+
+          <div class="cta-row">
+            <a class="btn primary" href="#operators">View Operators</a>
+            <a class="btn ghost" href="#workflow">How We Build</a>
+          </div>
+
+          <p class="meta">
+            Operator SDK <span class="dot">•</span> OLM / CSV <span class="dot">•</span>
+            Helm / Ansible Operators <span class="dot">•</span> Tekton + Argo CD
+          </p>
+        </div>
+
+        <div class="hero-art" aria-hidden="true">
+          <div class="art-card">
+            <div class="art-badge">Operator-driven Day-2 Ops</div>
+            <p class="art-text">Reconcile, remediate, and standardize platform workflows.</p>
+            <div class="art-lines">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="operators">
+      <div class="container">
+        <h2>Operator Catalog</h2>
+        <p class="subhead">
+          A preview of current Operators built by Duncan Networks. Each Operator is designed to be
+          GitOps-friendly, secure by default, and easy to support in production.
+        </p>
+
+        <div class="cards">
+          <article class="card">
+            <h3>Webserver Operator</h3>
+            <p>Deploys and manages standardized web workloads (NGINX/HTTPD) with opinionated defaults, health checks, and Route/TLS patterns.</p>
+            <ul>
+              <li>CRDs for simple app definitions</li>
+              <li>Route + TLS termination defaults</li>
+              <li>ConfigMap-driven site content</li>
+            </ul>
+            <div class="tag-row">
+              <span class="tag">nginx</span>
+              <span class="tag">httpd</span>
+              <span class="tag">OLM</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Identity / SSO Operator</h3>
+            <p>Automates identity integration patterns and safe configuration rollout for SSO-related services.</p>
+            <ul>
+              <li>Secret + config lifecycle management</li>
+              <li>Policy-driven configuration</li>
+              <li>Audit-friendly changes</li>
+            </ul>
+            <div class="tag-row">
+              <span class="tag">SAML</span>
+              <span class="tag">OIDC</span>
+              <span class="tag">RBAC</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Platform Automation Operator</h3>
+            <p>Encodes repeatable cluster tasks into reconciled resources (day-2 automation), reducing manual toil and drift.</p>
+            <ul>
+              <li>Drift correction via reconciliation</li>
+              <li>RBAC-scoped operations</li>
+              <li>GitOps-ready manifests</li>
+            </ul>
+            <div class="tag-row">
+              <span class="tag">day-2</span>
+              <span class="tag">GitOps</span>
+              <span class="tag">Tekton</span>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="workflow">
+      <div class="container">
+        <h2>How we build Operators</h2>
+        <p class="subhead">A predictable workflow that turns operational requirements into versioned APIs.</p>
+
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">01</div>
+            <h3>Design</h3>
+            <p>Define the CRD around real operational intent: desired state, constraints, and safe defaults. Emphasis on simplicity and supportability.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">02</div>
+            <h3>Package</h3>
+            <p>Ship with OLM in mind: proper RBAC, CSV metadata, upgrades, and clear ownership boundaries.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">03</div>
+            <h3>Deliver</h3>
+            <p>Build and publish through pipelines, then deploy via GitOps. Repeatable releases with minimal drift.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="principles">
+      <div class="container">
+        <h2>Principles</h2>
+        <p class="subhead">Operators should make platforms more boring — reliable, observable, and secure.</p>
+
+        <div class="principles">
+          <article class="pill">
+            <h3>Operational excellence</h3>
+            <p>Observability, runbooks, and predictable behaviors. We build for the on-call engineer.</p>
+          </article>
+          <article class="pill">
+            <h3>Security by default</h3>
+            <p>Least privilege, strong TLS, and a clean supply chain. Secure patterns are the baseline.</p>
+          </article>
+          <article class="pill">
+            <h3>Automation-first</h3>
+            <p>If it happens twice, it becomes code. Operators exist to eliminate click-ops and drift.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section contact" id="contact">
+      <div class="container contact-inner">
+        <div>
+          <h2>Contact</h2>
+          <p class="subhead">
+            This landing page is ConfigMap-driven (HTML/CSS). Update Git, let Argo CD sync, and your site updates.
+          </p>
+        </div>
+
+        <div class="contact-card">
+          <p><strong>Environment</strong> <span class="muted">OpenShift • nginx</span></p>
+          <p><strong>Focus</strong> <span class="muted">Operator Development • OLM • GitOps</span></p>
+          <p><strong>Theme</strong> <span class="muted">Reliable • Secure • Automatable</span></p>
+
+          <div class="contact-actions">
+            <a class="btn primary" href="#operators">Explore Operators</a>
+            <a class="btn ghost" href="#top">Back to top</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>© <span id="year"></span> Duncan Networks • Operators for day-2 excellence</p>
+      <p class="footer-links">
+        <a href="#operators">Operators</a>
+        <span class="dot">•</span>
+        <a href="#workflow">Workflow</a>
+        <span class="dot">•</span>
+        <a href="#principles">Principles</a>
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById("year").textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
