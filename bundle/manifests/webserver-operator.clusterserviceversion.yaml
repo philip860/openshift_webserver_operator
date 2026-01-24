@@ -41,7 +41,7 @@ metadata:
     operators.operatorframework.io.bundle.manifests.v1: manifests/
     operators.operatorframework.io.bundle.metadata.v1: metadata/
 
-    olm.skipRange: ">=1.0.0 <1.0.34"
+    olm.skipRange: ">=1.0.0 <1.0.36"
 
 spec:
   displayName: WebServer Operator
