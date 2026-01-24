@@ -8,7 +8,6 @@
 
     operator_version: "{{ lookup('env', 'WEBSERVER_OPERATOR_VERSION') | default('dev-unknown', true) }}"
 
-    # OpenShift-friendly defaults
     nginx_image_default:  "nginxinc/nginx-unprivileged:stable-alpine"
     apache_image_default: "docker.io/library/httpd:2.4-alpine"
 
@@ -16,9 +15,6 @@
     cr_read_delay: 5
 
   tasks:
-    #################################################################
-    # Read the WebServer CR (authoritative)
-    #################################################################
     - name: Read WebServer CR from API (authoritative, with retries)
       kubernetes.core.k8s_info:
         api_version: example.com/v1alpha1
@@ -42,15 +38,13 @@
       set_fact:
         spec_obj: "{{ ws_cr.resources[0].spec | default({}) }}"
 
-    #################################################################
-    # Normalize spec values
-    #################################################################
     - name: Normalize server type + other spec values
       set_fact:
         server_type_raw: "{{ spec_obj.get('type', 'nginx') }}"
         server_type: "{{ (spec_obj.get('type', 'nginx')) | string | lower | trim }}"
         replicas: "{{ spec_obj.get('replicas', 1) | int }}"
         port: "{{ spec_obj.get('port', 8080) | int }}"
+        custom_content_cm: "{{ spec_obj.get('contentConfigMapName', '') | string | trim }}"
 
     - name: Validate server_type
       fail:
@@ -78,7 +72,108 @@
         container_name: "{{ 'apache' if server_type in ['apache','httpd'] else 'nginx' }}"
 
     #################################################################
-    # Apache: config override to listen on {{ port }} and log to stdout
+    # Default content (index.html + style.css) + healthz (separate CM)
+    #################################################################
+    - name: Ensure default webroot ConfigMap exists (index.html + style.css)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ webserver_name }}-webroot"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          data:
+            index.html: |
+              <!doctype html>
+              <html>
+                <head>
+                  <meta charset="utf-8" />
+                  <title>{{ webserver_name }}</title>
+                  <link rel="stylesheet" href="style.css">
+                </head>
+                <body>
+                  <div class="wrap">
+                    <h1>{{ webserver_name }}</h1>
+                    <p>Deployed by webserver-operator ({{ operator_version }}).</p>
+                    <p class="hint">Tip: set <code>spec.contentConfigMapName</code> to override this page.</p>
+                  </div>
+                </body>
+              </html>
+            style.css: |
+              body { font-family: Arial, sans-serif; margin: 2rem; }
+              .wrap { max-width: 900px; }
+              .hint { opacity: 0.8; }
+
+    - name: Ensure healthz ConfigMap exists (always present for apache probe)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ webserver_name }}-healthz"
+            namespace: "{{ webserver_ns }}"
+            labels: "{{ labels }}"
+            annotations:
+              webserver-operator/version: "{{ operator_version }}"
+          data:
+            healthz: "ok\n"
+
+    #################################################################
+    # Optional custom content ConfigMap lookup
+    # - must exist
+    # - must include index.html key to activate
+    # - style.css is optional
+    #################################################################
+    - name: Lookup custom content ConfigMap if specified
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ webserver_ns }}"
+        name: "{{ custom_content_cm }}"
+      register: custom_cm_info
+      when: custom_content_cm | length > 0
+
+    - name: Determine whether custom content is usable
+      set_fact:
+        custom_cm_found: "{{ (custom_cm_info.resources | default([]) | length) > 0 }}"
+        custom_cm_has_index: >-
+          {{
+            (custom_cm_info.resources | default([]) | length) > 0 and
+            ('index.html' in (custom_cm_info.resources[0].data | default({})).keys())
+          }}
+        custom_cm_has_css: >-
+          {{
+            (custom_cm_info.resources | default([]) | length) > 0 and
+            ('style.css' in (custom_cm_info.resources[0].data | default({})).keys())
+          }}
+      when: custom_content_cm | length > 0
+
+    - name: Compute custom content mode flags
+      set_fact:
+        use_custom_content: >-
+          {{
+            (custom_content_cm | length > 0) and
+            (custom_cm_found | default(false)) and
+            (custom_cm_has_index | default(false))
+          }}
+        custom_content_reason: >-
+          {% if custom_content_cm | length == 0 %}
+          none
+          {% elif not (custom_cm_found | default(false)) %}
+          not_found
+          {% elif not (custom_cm_has_index | default(false)) %}
+          missing_index_html
+          {% else %}
+          ok
+          {% endif %}
+
+    #################################################################
+    # Apache config CM (unchanged)
     #################################################################
     - name: Ensure Apache config ConfigMap exists (listen on unprivileged port + stdout logs)
       kubernetes.core.k8s:
@@ -121,35 +216,7 @@
       when: server_type in ['apache','httpd']
 
     #################################################################
-    # Webroot for apache + nginx (index.html + healthz)
-    #################################################################
-    - name: Ensure webroot ConfigMap exists (index.html + healthz)
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: "{{ webserver_name }}-webroot"
-            namespace: "{{ webserver_ns }}"
-            labels: "{{ labels }}"
-            annotations:
-              webserver-operator/version: "{{ operator_version }}"
-          data:
-            index.html: |
-              <!doctype html>
-              <html>
-                <head><meta charset="utf-8" /><title>{{ webserver_name }}</title></head>
-                <body>
-                  <h1>{{ webserver_name }}</h1>
-                  <p>Deployed by webserver-operator ({{ operator_version }}).</p>
-                </body>
-              </html>
-            healthz: "ok\n"
-
-    #################################################################
-    # NGINX: provide config that listens on {{ port }} and serves webroot
-    # (avoids writing to /etc/nginx and avoids /var/cache perms)
+    # NGINX config CM (unchanged)
     #################################################################
     - name: Ensure NGINX config ConfigMap exists (listen on {{ port }}, serve webroot)
       kubernetes.core.k8s:
@@ -183,6 +250,25 @@
       when: server_type == 'nginx'
 
     #################################################################
+    # Build the webroot volume definition (default vs custom+healthz)
+    #
+    # - Default mode: mount {{name}}-webroot (index+css) + healthz
+    # - Custom mode: mount user CM (index required) + healthz
+    #
+    # We use a projected volume so Apache always gets /healthz.
+    #################################################################
+    - name: Build projected webroot volume sources
+      set_fact:
+        webroot_project_sources: >-
+          {{
+            (
+              [ {'configMap': {'name': (custom_content_cm if use_custom_content else (webserver_name ~ '-webroot')) }} ]
+              +
+              [ {'configMap': {'name': (webserver_name ~ '-healthz') }} ]
+            )
+          }}
+
+    #################################################################
     # Deployment (Apache path)
     #################################################################
     - name: Ensure Deployment exists (apache/httpd path)
@@ -210,8 +296,8 @@
               spec:
                 volumes:
                   - name: webroot
-                    configMap:
-                      name: "{{ webserver_name }}-webroot"
+                    projected:
+                      sources: "{{ webroot_project_sources }}"
                   - name: apacheconf
                     configMap:
                       name: "{{ webserver_name }}-apache-conf"
@@ -244,7 +330,7 @@
       when: server_type in ['apache','httpd']
 
     #################################################################
-    # Deployment (NGINX path) - OpenShift-safe
+    # Deployment (NGINX path)
     #################################################################
     - name: Ensure Deployment exists (nginx path)
       kubernetes.core.k8s:
@@ -271,8 +357,8 @@
               spec:
                 volumes:
                   - name: webroot
-                    configMap:
-                      name: "{{ webserver_name }}-webroot"
+                    projected:
+                      sources: "{{ webroot_project_sources }}"
                   - name: nginxconf
                     configMap:
                       name: "{{ webserver_name }}-nginx-conf"
@@ -292,7 +378,6 @@
                       - name: http
                         containerPort: "{{ port }}"
                     env:
-                      # Force nginx temp/cache paths to writable locations
                       - name: NGINX_CLIENT_TEMP_PATH
                         value: /tmp/nginx/client_temp
                       - name: NGINX_PROXY_TEMP_PATH
@@ -307,12 +392,10 @@
                       - name: webroot
                         mountPath: /usr/share/nginx/html
                         readOnly: true
-                      # Provide server config without modifying image FS
                       - name: nginxconf
                         mountPath: /etc/nginx/conf.d/default.conf
                         subPath: default.conf
                         readOnly: true
-                      # Writable locations
                       - name: nginxcache
                         mountPath: /var/cache/nginx
                       - name: nginxtmp
@@ -321,13 +404,13 @@
                         mountPath: /var/run
                     readinessProbe:
                       httpGet:
-                        path: /
+                        path: /healthz
                         port: http
                       initialDelaySeconds: 5
                       periodSeconds: 10
                     livenessProbe:
                       httpGet:
-                        path: /
+                        path: /healthz
                         port: http
                       initialDelaySeconds: 10
                       periodSeconds: 20
@@ -358,7 +441,7 @@
                 protocol: TCP
 
     #################################################################
-    # Route (OpenShift)
+    # Route
     #################################################################
     - name: Ensure Route exists
       kubernetes.core.k8s:
@@ -382,8 +465,19 @@
               termination: edge
 
     #################################################################
-    # Update CR status
+    # Status message: clearly report fallback vs custom content
     #################################################################
+    - name: Compute status message
+      set_fact:
+        status_content_msg: >-
+          {% if custom_content_cm | length == 0 %}
+          Using default content (no contentConfigMapName specified).
+          {% elif use_custom_content %}
+          Using custom content from ConfigMap '{{ custom_content_cm }}' (index.html{{ ' + style.css' if (custom_cm_has_css | default(false)) else '' }}).
+          {% else %}
+          ConfigMap '{{ custom_content_cm }}' could not be used (reason={{ custom_content_reason }}). Falling back to default content.
+          {% endif %}
+
     - name: Set status to Ready
       operator_sdk.util.k8s_status:
         api_version: example.com/v1alpha1
@@ -393,11 +487,10 @@
         status:
           phase: Ready
           operatorVersion: "{{ operator_version }}"
-          message: "Operator {{ operator_version }} deployed {{ container_name }} with {{ replicas }} replica(s) on port {{ port }}"
+          message: >-
+            Operator {{ operator_version }} deployed {{ container_name }} with {{ replicas }} replica(s) on port {{ port }}.
+            {{ status_content_msg }}
 
-    #################################################################
-    # Final version banner
-    #################################################################
     - name: VERSION BANNER - operator version running
       debug:
         msg:
@@ -406,4 +499,5 @@
           - "CR: {{ webserver_ns }}/{{ webserver_name }}"
           - "server_type={{ server_type }} image={{ container_image }}"
           - "replicas={{ replicas }} port={{ port }} probe_path={{ probe_path }}"
+          - "custom_content_cm={{ custom_content_cm }} use_custom_content={{ use_custom_content }} reason={{ custom_content_reason }}"
           - "============================================================"
