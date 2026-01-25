@@ -1,14 +1,10 @@
 # -----------------------------------------------------------------------------
 # WebServer Operator - Rebased UBI9 + Preserve official runner/ansible behavior
 #
-# Goals:
-# - Pass Red Hat scan (UBI base + errata)
-# - Provide ansible-operator + ansible-runner CLI + ansible-playbook
-# - Ensure runner events work (playbook_on_stats) by forcing stdout_callback=ansible_runner
-# - Ensure localhost k8s modules work (kubernetes/openshift installed for /usr/bin/python3)
-# - Avoid pip dependency conflicts (pin resolvelib for ansible-core 2.14.x)
-# - Install ansible-runner-http
-# - Install/refresh operator_sdk.util collection
+# FIX for Preflight HasModifiedFiles:
+# - Do NOT let pip overwrite RPM-managed files in /usr/lib64/python3.9/site-packages
+# - Remove pip PyYAML upgrade and force pip installs into /usr/local via --prefix=/usr/local
+# - Pin PyYAML to the RPM version via constraints to avoid pip "upgrading" it
 # -----------------------------------------------------------------------------
 
 ARG OSE_ANSIBLE_DIGEST=sha256:81fe42f5070bdfadddd92318d00eed63bf2ad95e2f7e8a317f973aa8ab9c3a88
@@ -34,6 +30,7 @@ RUN set -eux; \
 # 2) Enable UBI repos + install REQUIRED runtime:
 #    - python3 + pip (this is /usr/bin/python3, which ansible-core uses)
 #    - ansible-core (provides /usr/bin/ansible-playbook)
+#    - python3-pyyaml from RPM (keep RPM-managed PyYAML; do NOT overwrite with pip)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install dnf-plugins-core ca-certificates yum findutils which tar gzip shadow-utils; \
@@ -42,7 +39,7 @@ RUN set -eux; \
     dnf config-manager --set-enabled ubi-9-codeready-builder-rpms || true; \
     dnf -y makecache --refresh; \
     \
-    dnf -y install python3 python3-pip python3-setuptools python3-wheel; \
+    dnf -y install python3 python3-pip python3-setuptools python3-wheel python3-pyyaml; \
     /usr/bin/python3 -V; \
     /usr/bin/python3 -m pip --version; \
     \
@@ -124,29 +121,31 @@ RUN set -eux; \
 # -----------------------------------------------------------------------------
 # 8) Pip constraints to keep RPM-installed ansible-core happy
 #    ansible-core 2.14.x requires resolvelib < 0.9.0
+#    Pin PyYAML to RPM version to avoid pip upgrades touching /usr/lib64
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     printf '%s\n' \
       'resolvelib>=0.5.3,<0.9.0' \
+      'PyYAML==5.4.1' \
     > /etc/pip-constraints.txt
 
 # -----------------------------------------------------------------------------
 # 9) Install python deps for *system python* (/usr/bin/python3)
-#    - ansible-runner module (needed by /usr/local/bin/ansible-runner)
+#    IMPORTANT: install to /usr/local ONLY (do not modify /usr/lib64 site-packages)
+#    - ansible-runner module (needed by /usr/local/bin/ansible-runner CLI)
 #    - kubernetes/openshift (needed by kubernetes.core modules on localhost)
 #    - ansible-runner-http
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-    /usr/bin/python3 -m pip install --no-cache-dir --upgrade -c /etc/pip-constraints.txt \
+    /usr/bin/python3 -m pip install --no-cache-dir --upgrade --prefix=/usr/local -c /etc/pip-constraints.txt \
       pip setuptools wheel; \
-    /usr/bin/python3 -m pip install --no-cache-dir -c /etc/pip-constraints.txt \
+    /usr/bin/python3 -m pip install --no-cache-dir --prefix=/usr/local -c /etc/pip-constraints.txt \
       "ansible-runner==2.4.1" \
       "ansible-runner-http" \
       "kubernetes>=24.2.0" \
       "openshift>=0.13.2" \
       "pexpect>=4.8.0" \
       "ptyprocess>=0.7.0" \
-      "PyYAML>=6.0" \
       "python-daemon>=3.0.1" \
       "lockfile>=0.12.2" \
       "jinja2>=3.1" \
@@ -154,6 +153,7 @@ RUN set -eux; \
       "cryptography"; \
     \
     /usr/bin/python3 -m pip check; \
+    /usr/bin/python3 -c "import yaml, _yaml; print('OK: PyYAML yaml=', yaml.__file__, ' _yaml=', _yaml.__file__)"; \
     /usr/bin/python3 -c "import kubernetes, openshift; print('OK: k8s libs')"; \
     /usr/bin/python3 -c "import ansible_runner; print('OK: ansible_runner import:', ansible_runner.__file__)"; \
     /usr/bin/python3 -c "import ansible_runner_http; print('OK: ansible_runner_http import:', ansible_runner_http.__file__)"; \
@@ -172,12 +172,10 @@ RUN set -eux; \
       --collections-path /opt/ansible/.ansible/collections \
       | grep -E '^operator_sdk\.util\b'
 
-
 # -----------------------------------------------------------------------------
 # 11) CRITICAL: ensure playbook_on_stats event is emitted
 #     Force stdout_callback=ansible_runner and ensure callback plugin is discoverable.
 # -----------------------------------------------------------------------------
-# Make sure callback destination exists
 RUN set -eux; \
     mkdir -p /usr/share/ansible/plugins/callback /etc/ansible
 
