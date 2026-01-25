@@ -1,22 +1,19 @@
 apiVersion: operators.coreos.com/v1alpha1
 kind: ClusterServiceVersion
 metadata:
-  name: webserver-operator.v1.0.35
+  name: webserver-operator.v1.0.36
   namespace: placeholder
   annotations:
     categories: Application Runtime
     capabilities: Basic Install
     description: An Ansible-based operator that deploys NGINX or Apache based on a WebServer CR.
 
-    # OLM bundle metadata #
-    operators.operatorframework.io.bundle.package.v1: webserver-operator
+    operators.operatorframework.io.bundle.package.v1: webserver-operator-dev
     operators.operatorframework.io.bundle.channels.v1: stable
     operators.operatorframework.io.bundle.channel.default.v1: stable
 
-    # Operator image (pinned)
-    containerImage: quay.io/philip860/webserver-operator@sha256:dfa8adcb0dd3e7c88c0c973463ee26fa951db1f0070aba65bc9682bdcd91be17
+    containerImage: quay.io/philip860/webserver-operator:v1.0.36
 
-    # Console sample CR
     alm-examples: >-
       [
         {
@@ -26,12 +23,12 @@ metadata:
           "spec": {
             "type": "nginx",
             "replicas": 1,
-            "port": 8080
+            "port": 8080,
+            "contentConfigMapName": ""
           }
         }
       ]
 
-    # Required feature flags (must be strings "true"/"false")
     features.operators.openshift.io/disconnected: "false"
     features.operators.openshift.io/fips-compliant: "false"
     features.operators.openshift.io/proxy-aware: "false"
@@ -40,14 +37,11 @@ metadata:
     features.operators.openshift.io/token-auth-azure: "false"
     features.operators.openshift.io/token-auth-gcp: "false"
 
-    # Bundle layout
     operators.operatorframework.io.bundle.mediatype.v1: registry+v1
     operators.operatorframework.io.bundle.manifests.v1: manifests/
     operators.operatorframework.io.bundle.metadata.v1: metadata/
 
-    # Allow clusters on older 1.0.x releases to upgrade directly to 1.0.35
-    # even if intermediate versions are missing from some catalog/index builds.
-    olm.skipRange: ">=1.0.0 <1.0.35"
+    olm.skipRange: ">=1.0.0 <1.0.36"
 
 spec:
   displayName: WebServer Operator
@@ -55,13 +49,12 @@ spec:
     The WebServer Operator manages WebServer custom resources which can
     deploy either NGINX or Apache HTTPD behind a Service and OpenShift Route.
   maturity: stable
-  version: 1.0.35
-
-  # Replace the last known-good public stable version in the catalog
-  replaces: webserver-operator.v1.0.34
+  version: 1.0.36
+  replaces: webserver-operator.v1.0.35
 
   provider:
     name: Duncan-Networks
+
 
   icon:
     - base64data: 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNTYiIGhlaWdodD0i
@@ -2888,14 +2881,18 @@ spec:
 
         NUVya0pnZ2c9PSIvPgo8L3N2Zz4='
       mediatype: image/svg+xml
+
+
   keywords:
     - nginx
     - apache
     - webserver
     - ansible
+
   relatedImages:
     - name: webserver-operator
-      image: quay.io/philip860/webserver-operator@sha256:dfa8adcb0dd3e7c88c0c973463ee26fa951db1f0070aba65bc9682bdcd91be17
+      image: quay.io/philip860/webserver-operator:v1.0.36
+
   install:
     strategy: deployment
     spec:
@@ -2914,7 +2911,7 @@ spec:
                 serviceAccountName: webserver-operator
                 containers:
                   - name: ansible-operator
-                    image: quay.io/philip860/webserver-operator@sha256:dfa8adcb0dd3e7c88c0c973463ee26fa951db1f0070aba65bc9682bdcd91be17
+                    image: quay.io/philip860/webserver-operator:v1.0.36
                     imagePullPolicy: Always
                     env:
                       - name: WATCH_NAMESPACE
@@ -2928,98 +2925,39 @@ spec:
                       - name: OPERATOR_NAME
                         value: webserver-operator
                       - name: WEBSERVER_OPERATOR_VERSION
-                        value: "v1.0.35"
+                        value: "v1.0.36"
       permissions:
         - serviceAccountName: webserver-operator
           rules:
-            - apiGroups:
-                - example.com
-              resources:
-                - webservers
-                - webservers/status
-                - webservers/finalizers
-              verbs:
-                - get
-                - list
-                - watch
-                - create
-                - update
-                - patch
-                - delete
-            - apiGroups:
-                - apps
-              resources:
-                - deployments
-                - replicasets
-              verbs:
-                - get
-                - list
-                - watch
-                - create
-                - update
-                - patch
-                - delete
-            - apiGroups:
-                - ''
-              resources:
-                - pods
-              verbs:
-                - get
-                - list
-                - watch
-            - apiGroups:
-                - ''
-              resources:
-                - services
-                - configmaps
-                - secrets
-              verbs:
-                - get
-                - list
-                - watch
-                - create
-                - update
-                - patch
-                - delete
-            - apiGroups:
-                - ''
-              resources:
-                - events
-              verbs:
-                - create
-                - patch
-                - update
-            - apiGroups:
-                - route.openshift.io
-              resources:
-                - routes
-              verbs:
-                - get
-                - list
-                - watch
-                - create
-                - update
-                - patch
-                - delete
+            - apiGroups: ["example.com"]
+              resources: ["webservers","webservers/status","webservers/finalizers"]
+              verbs: ["get","list","watch","create","update","patch","delete"]
+            - apiGroups: ["apps"]
+              resources: ["deployments","replicasets"]
+              verbs: ["get","list","watch","create","update","patch","delete"]
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get","list","watch"]
+            - apiGroups: [""]
+              resources: ["services","configmaps","secrets"]
+              verbs: ["get","list","watch","create","update","patch","delete"]
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["create","patch","update"]
+            - apiGroups: ["route.openshift.io"]
+              resources: ["routes"]
+              verbs: ["get","list","watch","create","update","patch","delete"]
+
       clusterPermissions:
         - serviceAccountName: webserver-operator
           rules:
-            - apiGroups:
-                - ''
-              resources:
-                - namespaces
-              verbs:
-                - get
-                - list
-                - watch
-            - apiGroups:
-                - route.openshift.io
-              resources:
-                - routes
-              verbs:
-                - get
-                - list
-                - watch
+            - apiGroups: [""]
+              resources: ["namespaces"]
+              verbs: ["get","list","watch"]
+            - apiGroups: ["route.openshift.io"]
+              resources: ["routes"]
+              verbs: ["get","list","watch"]
+
   customresourcedefinitions:
     owned:
       - name: webservers.example.com
@@ -3027,6 +2965,34 @@ spec:
         kind: WebServer
         displayName: WebServer
         description: Custom resource that declares an Apache or NGINX deployment.
+
+        # Console form fields (OpenShift UI)
+        specDescriptors:
+          - path: type
+            displayName: Web Server Type
+            description: Select nginx or apache/httpd
+            x-descriptors:
+              - urn:alm:descriptor:com.tectonic.ui:select:nginx
+              - urn:alm:descriptor:com.tectonic.ui:select:apache
+              - urn:alm:descriptor:com.tectonic.ui:select:httpd
+          - path: replicas
+            displayName: Replicas
+            description: Number of pod replicas
+            x-descriptors:
+              - urn:alm:descriptor:com.tectonic.ui:number
+          - path: port
+            displayName: Container Port
+            description: Unprivileged port the container listens on
+            x-descriptors:
+              - urn:alm:descriptor:com.tectonic.ui:number
+          - path: contentConfigMapName
+            displayName: Custom Content ConfigMap Name
+            description: >-
+              Optional ConfigMap in the same namespace containing `index.html` (required) and optional `style.css`.
+              If not found, the operator will fall back to defaults and report it in status.
+            x-descriptors:
+              - urn:alm:descriptor:com.tectonic.ui:text
+
   installModes:
     - type: OwnNamespace
       supported: true
